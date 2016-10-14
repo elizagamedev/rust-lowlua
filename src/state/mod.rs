@@ -239,13 +239,25 @@ impl State {
 
     /// Returns the slice of data represented by the userdata at the given index if the value
     /// is userdata. This function does not work with light userdata.
-    pub fn userdata_at(&mut self, idx: LuaIndex) -> Result<&mut [u8]> {
+    pub fn userdata_at(&self, idx: LuaIndex) -> Result<&mut [u8]> {
         unsafe {
             if ffi::lua_type(self.lua, idx.to_ffi()) == ffi::LUA_TUSERDATA {
                 use std::slice;
                 let len = ffi::lua_rawlen(self.lua, idx.to_ffi()) as usize;
                 let ptr = transmute::<*mut c_void, *mut u8>(ffi::lua_touserdata(self.lua, idx.to_ffi()));
                 Ok(slice::from_raw_parts_mut(ptr, len))
+            } else {
+                Err(Error::Type)
+            }
+        }
+    }
+
+    /// Returns the pointer represented by the light userdata at the given index if the type is
+    /// light userdata.
+    pub fn light_userdata_at<T>(&self, idx: LuaIndex) -> Result<*mut T> {
+        unsafe {
+            if ffi::lua_type(self.lua, idx.to_ffi()) == ffi::LUA_TLIGHTUSERDATA {
+                Ok(transmute::<*mut c_void, *mut T>(ffi::lua_touserdata(self.lua, idx.to_ffi())))
             } else {
                 Err(Error::Type)
             }
