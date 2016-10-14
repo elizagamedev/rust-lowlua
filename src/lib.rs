@@ -14,13 +14,13 @@ pub use state::*;
 /// In order to communicate properly with Lua, a native function must use the following protocol,
 /// which defines the way parameters and results are passed: a native function receives its
 /// arguments from Lua in its stack in direct order (the first argument is pushed first).
-/// So, when the function starts, `State::gettop()` returns the number of arguments received by the
+/// So, when the function starts, `State::get_top()` returns the number of arguments received by the
 /// function. The first argument (if any) is at index 1 and its last argument is at index
-/// `State::gettop()`. To return values to Lua, a native function just pushes them onto the stack,
+/// `State::get_top()`. To return values to Lua, a native function just pushes them onto the stack,
 /// in direct order (the first result is pushed first), and returns the number of results.
 /// Any other value in the stack below the results will be properly discarded by Lua.
 /// Like a Lua function, a native function called by Lua can also return many results.
-pub type NativeFunction = fn(&mut State) -> i32;
+pub type NativeFunction = fn(&mut State) -> u32;
 
 /// Enum of native Lua types.
 #[derive(Debug)]
