@@ -24,6 +24,8 @@ pub type NativeFunction = fn(&mut State) -> u32;
 
 /// Enum of native Lua types.
 #[derive(Debug)]
+#[derive(Eq)]
+#[derive(PartialEq)]
 pub enum LuaType {
     Nil,
     Boolean,
@@ -105,11 +107,9 @@ pub enum Error {
     /// An error occurred while converting types.
     Type,
     /// A syntax error occurred.
-    Syntax,
+    Syntax(String),
     /// A runtime error occurred.
-    Runtime,
-    /// A Lua `__gc` metamethod returned an error.
-    GcMetamethod,
+    Runtime(String, String),
 }
 
 impl fmt::Display for Error {
@@ -118,9 +118,8 @@ impl fmt::Display for Error {
             Error::Io(ref err) => err.fmt(f),
             Error::Utf8(ref err) => err.fmt(f),
             Error::Type => write!(f, "An invalid Lua/native type conversion was attempted."),
-            Error::Syntax => write!(f, "A Lua syntax error occurred."),
-            Error::Runtime => write!(f, "A Lua runtime error occurred."),
-            Error::GcMetamethod => write!(f, "A Lua `__gc` metamethod returned an error."),
+            Error::Syntax(ref str) => write!(f, "{}", str),
+            Error::Runtime(ref str, _) => write!(f, "{}", str),
         }
     }
 }
@@ -131,9 +130,8 @@ impl error::Error for Error {
             Error::Io(ref err) => err.description(),
             Error::Utf8(ref err) => err.description(),
             Error::Type => "type conversion error",
-            Error::Syntax => "Lua syntax error",
-            Error::Runtime => "Lua runtime error",
-            Error::GcMetamethod => "Lua GC metamethod error",
+            Error::Syntax(_) => "Lua syntax error",
+            Error::Runtime(_, _) => "Lua runtime error",
         }
     }
 

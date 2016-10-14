@@ -47,7 +47,7 @@ impl State {
 
         // Set the panic handler
         unsafe { ffi::lua_atpanic(lua, panic) };
-        extern "C" fn panic(lua: *mut ffi::lua_State) -> libc::c_int {
+        extern "C" fn panic(lua: *mut ffi::lua_State) -> c_int {
             let mut state = State::from_raw_state(lua);
             let err = state.to_string(-1).unwrap();
             panic!("PANIC: unprotected error in call to Lua API ({})", err);
@@ -63,12 +63,21 @@ impl State {
         // registry. The address isn't actually used to track the location of the object, but the
         // usage of an address for the key of a registry table was recommended by the Lua 5.3
         // reference manual.
+        //
+        // Also take this opportunity to upload our error handler function.
         unsafe {
             let extraspace = transmute::<*mut c_void,
                                          *mut *mut c_void>(ffi::lua_getextraspace(state.lua));
             *extraspace = transmute::<*mut State, *mut c_void>(&mut state as *mut State);
             ffi::lua_newtable(state.lua);
+            ffi::lua_pushcfunction(state.lua, errfunc);
+            ffi::lua_setfield(state.lua, -2, CString::new("errfunc").unwrap().as_ptr());
             ffi::lua_rawsetp(state.lua, ffi::LUA_REGISTRYINDEX, *extraspace);
+        }
+
+        extern "C" fn errfunc(lua: *mut ffi::lua_State) -> c_int {
+            // TODO: traceback
+            1
         }
         state
     }
@@ -120,7 +129,7 @@ impl State {
                           CString::new(chunkname).unwrap().as_ptr(),
                           ptr::null())
         };
-        lua_to_rust_result(result)
+        self.lua_to_rust_result(result)
     }
 
     /// Calls a function.
@@ -141,8 +150,13 @@ impl State {
             LuaCallResults::Num(val) => val as c_int,
             LuaCallResults::MultRet => ffi::LUA_MULTRET,
         };
-        let result = unsafe { ffi::lua_pcall(self.lua, nargs as c_int, nresults, 0) };
-        lua_to_rust_result(result)
+        self.get_registry();
+        self.get_field(LuaIndex::Stack(-1), "errfunc");
+        self.remove(-2);
+        let errfunc_idx = self.abs_index(-(nargs as i32) - 2);
+        self.insert(errfunc_idx);
+        let result = unsafe { ffi::lua_pcall(self.lua, nargs as c_int, nresults, errfunc_idx) };
+        self.lua_to_rust_result(result)
     }
 
     /// Push a type on the top of the stack.
@@ -833,6 +847,22 @@ impl State {
     pub fn _to_native_function(&self, _idx: i32) -> Option<NativeFunction> {
         unimplemented!();
     }
+
+    // Debug
+    fn lua_to_rust_result(&mut self, result: c_int) -> Result<()> {
+        match result {
+            ffi::LUA_OK => Ok(()),
+            ffi::LUA_ERRSYNTAX => Err(Error::Syntax(self.at(LuaIndex::Stack(-1)).unwrap())),
+            ffi::LUA_ERRRUN | ffi::LUA_ERRGCMM => {
+                let msg = self.at(LuaIndex::Stack(-1)).unwrap();
+                let trace = "".to_string();
+                Err(Error::Runtime(msg, trace))
+            }
+            ffi::LUA_ERRMEM => panic!("Lua memory allocation error"),
+            ffi::LUA_ERRERR => panic!("Lua error handler failed"),
+            _ => unreachable!("{}", result),
+        }
+    }
 }
 
 impl Drop for State {
@@ -884,16 +914,5 @@ fn lua_to_rust_type_checked(typ: c_int) -> Option<LuaType> {
     match typ {
         ffi::LUA_TNONE => None,
         _ => Some(lua_to_rust_type(typ)),
-    }
-}
-
-fn lua_to_rust_result(result: c_int) -> Result<()> {
-    match result {
-        ffi::LUA_OK => Ok(()),
-        ffi::LUA_ERRSYNTAX => Err(Error::Syntax),
-        ffi::LUA_ERRGCMM => Err(Error::GcMetamethod),
-        ffi::LUA_ERRRUN => Err(Error::Runtime),
-        ffi::LUA_ERRMEM => panic!("Lua memory allocation error"),
-        _ => unreachable!(),
     }
 }
