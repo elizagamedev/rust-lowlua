@@ -86,7 +86,7 @@ impl LuaIndex {
     fn to_ffi(&self) -> libc::c_int {
         match *self {
             LuaIndex::Stack(val) => val,
-            LuaIndex::Upvalue(val) => ffi::lua_upvalueindex(val as i32),
+            LuaIndex::Upvalue(val) => ffi::lua_upvalueindex(val as i32 + 1),
             LuaIndex::Registry => ffi::LUA_REGISTRYINDEX,
         }
     }
