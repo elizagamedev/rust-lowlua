@@ -1,0 +1,9 @@
+[package]
+name = "lowlua"
+version = "0.1.0"
+authors = ["Mathew Velasquez <mathewvq@gmail.com>"]
+license = "MPL-2.0"
+
+[dependencies]
+libc = "0.2"
+lua53-sys = { git = "https://github.com/mathewv/rust-lua53-sys.git" }
