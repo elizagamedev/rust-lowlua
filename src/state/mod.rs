@@ -65,12 +65,12 @@ impl State {
     pub fn loadstring(&mut self, str: &str, chunkname: &str) -> Result<()> {
         // TODO: special case for strings so there's not so much memory movement?
         let vec = str.as_bytes().to_vec();
-        self.loadstream(&mut vec.as_slice(), chunkname)
+        self.loadstream(vec.as_slice(), chunkname)
     }
 
     /// Load string containing Lua code as a Lua function on the top of the stack.
     /// If an error occurs, nothing is pushed to the stack.
-    pub fn loadstream<'a, R: io::Read>(&mut self, stream: &'a mut R, chunkname: &str) -> Result<()> {
+    pub fn loadstream<R: io::Read>(&mut self, stream: R, chunkname: &str) -> Result<()> {
         extern "C" fn reader<R: io::Read>(_lua: *mut ffi::lua_State,
                                 data: *mut libc::c_void,
                                 size: *mut size_t)
@@ -84,8 +84,8 @@ impl State {
             }
         }
 
-        struct ReaderData<'a, R: 'a> {
-            stream: &'a mut R,
+        struct ReaderData<R: io::Read> {
+            stream: R,
             string: Vec<u8>,
         }
 
