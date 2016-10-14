@@ -53,10 +53,23 @@ impl State {
             panic!("PANIC: unprotected error in call to Lua API ({})", err);
         }
 
-        State {
+        // Create the state object
+        let mut state = State {
             lua: lua,
             should_free: true,
+        };
+
+        // Add the address of the State object to the "extradata" and create a table in the
+        // registry. The address isn't actually used to track the location of the object, but the
+        // usage of an address for the key of a registry table was recommended by the Lua 5.3
+        // reference manual.
+        unsafe {
+            let extraspace = transmute::<*mut c_void, *mut *mut c_void>(ffi::lua_getextraspace(state.lua));
+            *extraspace = transmute::<*mut State, *mut c_void>(&mut state as *mut State);
+            ffi::lua_newtable(state.lua);
+            ffi::lua_rawsetp(state.lua, ffi::LUA_REGISTRYINDEX, *extraspace);
         }
+        state
     }
 
     /// Opens all standard Lua libraries into the state.
@@ -491,6 +504,15 @@ impl State {
     /// Returns the type of the pushed value.
     pub fn get_user_value(&mut self, idx: i32) -> LuaType {
         lua_to_rust_type(unsafe { ffi::lua_getuservalue(self.lua, idx as c_int) })
+    }
+
+    /// Pushes our registry table onto the stack. When the Lua state is crated, a table is
+    /// automatically allocated in the registry that can be freely used by the program.
+    pub fn get_registry(&mut self) {
+        unsafe {
+            let extraspace = transmute::<*mut c_void, *const *mut c_void>(ffi::lua_getextraspace(self.lua));
+            ffi::lua_rawgetp(self.lua, ffi::LUA_REGISTRYINDEX, *extraspace);
+        }
     }
 
     /// Pops a value from the stack and sets it as the new value of global `name`.
