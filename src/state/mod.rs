@@ -216,6 +216,19 @@ impl State {
         }
     }
 
+    /// Pushes a light userdata onto the stack.
+    ///
+    /// Userdata represent native values in Lua. A light userdata represents a pointer to memory.
+    /// It is a value (like a number): you do not create it, it has no individual metatable, and it
+    /// is not collected (as it was never created). A light userdata is equal to "any" light
+    /// userdata with the same memory address.
+    pub fn push_light_userdata<T>(&mut self, p: *const T) {
+        unsafe {
+            let p = transmute::<*const T, *mut c_void>(p);
+            ffi::lua_pushlightuserdata(self.lua, p);
+        }
+    }
+
     /// Get a type from a place on the stack.
     pub fn at<T: FromLua>(&mut self, idx: i32) -> Result<T> {
         let top = self.get_top();
@@ -478,9 +491,11 @@ impl State {
     /// it does not invoke the `__index` metamethod.
     ///
     /// Returns the type of the pushed value.
-    pub fn raw_get_p(&mut self, _idx: i32, _p: *const c_void) -> i32 {
-        // TODO: rawgetp
-        unimplemented!();
+    pub fn raw_get_p<T>(&mut self, idx: i32, p: *const T) -> LuaType {
+        unsafe {
+            let p = transmute::<*const T, *const c_void>(p);
+            lua_to_rust_type(ffi::lua_rawgetp(self.lua, idx, p))
+        }
     }
 
     /// Creates a new empty table and pushes it onto the stack.
@@ -575,9 +590,11 @@ impl State {
     ///
     /// This function pops the value from the stack. The assignment is raw, that is,
     /// it does not invoke the `__newindex` metamethod.
-    pub fn raw_set_p(&mut self, _idx: i32, _p: *const c_void) {
-        // TODO: rawsetp
-        unimplemented!();
+    pub fn raw_set_p<T>(&mut self, idx: i32, p: *const T) {
+        unsafe {
+            let p = transmute::<*const T, *const c_void>(p);
+            ffi::lua_rawsetp(self.lua, idx, p);
+        }
     }
 
     /// Pops a table from the stack and sets it as the new metatable for the value at the
@@ -593,9 +610,9 @@ impl State {
     }
 
     /// Sets the native function `f` as the new value of global `name`.
-    pub fn register(&mut self, _name: &str, _f: NativeFunction) {
-        unimplemented!();
-        // unsafe { ffi::lua_register(self.lua, name, f) }
+    pub fn register(&mut self, name: &str, f: NativeFunction) {
+        self.push_function(f);
+        self.set_global(name);
     }
 
     /// Stops the garbage collector.
@@ -714,10 +731,6 @@ impl State {
 
     fn push_boolean(&mut self, b: bool) {
         unsafe { ffi::lua_pushboolean(self.lua, if b { 1 } else { 0 }) }
-    }
-
-    fn _push_light_userdata(&mut self, p: *mut c_void) {
-        unsafe { ffi::lua_pushlightuserdata(self.lua, p) }
     }
 
     fn push_unsigned(&mut self, n: u64) {
