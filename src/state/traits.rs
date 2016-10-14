@@ -102,7 +102,7 @@ impl ToLua for bool {
     }
 }
 
-impl ToLua for str {
+impl<'a> ToLua for &'a str {
     fn to_lua(&self, state: &mut State) -> Result<()> {
         state.push_string(self);
         Ok(())
