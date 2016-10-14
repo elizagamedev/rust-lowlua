@@ -28,8 +28,8 @@ impl State {
         let lua = unsafe { ffi::lua_newstate(alloc, ptr::null_mut()) };
         extern "C" fn alloc(_ud: *mut c_void,
                             ptr: *mut c_void,
-                            _osize: libc::size_t,
-                            nsize: libc::size_t)
+                            _osize: size_t,
+                            nsize: size_t)
                             -> *mut c_void {
             unsafe {
                 if nsize == 0 {
@@ -141,12 +141,89 @@ impl State {
         result
     }
 
+    /// Pushes a native function onto the stack. This function receives a pointer to a native
+    /// function and pushes onto the stack a Lua value of type function that, when called, invokes
+    /// the corresponding native function.
+    ///
+    /// Any function to be callable by Lua must follow the correct protocol to receive its
+    /// parameters and return its results ([see `NativeFunction`](NativeFunction.t.html)).
+    pub fn push_function(&mut self, f: NativeFunction) {
+        self.push_closure(f, 0);
+    }
+
+    /// Pushes a new closure onto the stack. Note that this is *not* a Rust closure, due to
+    /// lifetime tracking limitations.
+    ///
+    /// When a native function is created, it is possible to associate some values with it, thus
+    /// creating a native closure ([see here](https://www.lua.org/manual/5.3/manual.html#4.4));
+    /// these values are then accessible to the function whenever it is called. To associate values
+    /// with a native function, first these values must be pushed onto the stack (when there are
+    /// multiple values, the first value is pushed first). Then `push_closure()` is called to create
+    /// and push the native function onto the stack, with the argument `n` telling how many values
+    /// will be associated with the function. `push_closure()` also pops these values from the
+    /// stack.
+    ///
+    /// The maximum value for n is 254. This differs from standard C Lua, as lowlua needs the first
+    /// index internally.
+    pub fn push_closure(&mut self, f: NativeFunction, n: u32) {
+        extern "C" fn func(lua: *mut ffi::lua_State) -> c_int {
+            unsafe {
+                let f = *transmute::<*mut c_void, *mut NativeFunction>(ffi::lua_touserdata(lua, ffi::lua_upvalueindex(1)));
+                let mut state = State::from_raw_state(lua);
+                f(&mut state) as c_int
+            }
+        }
+
+        unsafe {
+            // Push userdata instead of light userdata, as some platforms may have differing
+            // pointer sizes between functions and variables.
+            use std::mem::size_of;
+            let ud =
+            transmute::<*mut c_void,
+                *mut NativeFunction>(ffi::lua_newuserdata(self.lua,
+                                                          size_of::<NativeFunction>()));
+            *ud = f;
+            let n = (n + 1) as i32;
+            if n > 1 {
+                self.insert(n);
+            }
+            ffi::lua_pushcclosure(self.lua, func, n);
+        }
+    }
+
+    /// This function allocates a new block of memory with the size and contents of `data`,
+    /// pushes onto the stack a new full userdata with the block address, and returns a slice to
+    /// the block. The host program can freely use this memory.
+    pub fn push_userdata(&mut self, data: &[u8]) -> &mut [u8] {
+        unsafe {
+            use std::slice;
+            let ptr = ffi::lua_newuserdata(self.lua, data.len() as size_t);
+            libc::memcpy(ptr, transmute::<*const u8, *const c_void>(data.as_ptr()), data.len());
+            slice::from_raw_parts_mut(transmute::<*mut c_void, *mut u8>(ptr), data.len())
+        }
+    }
+
     /// Get a type from a place on the stack.
     pub fn at<T: FromLua>(&mut self, idx: i32) -> Result<T> {
         let top = self.get_top();
         let result = T::from_lua(self, idx);
         self.set_top(top);
         result
+    }
+
+    /// Returns the slice of data represented by the userdata at the given index if the value
+    /// is userdata. This function does not work with light userdata.
+    pub fn userdata_at(&mut self, idx: i32) -> Result<&mut [u8]> {
+        unsafe {
+            if ffi::lua_type(self.lua, idx as c_int) == ffi::LUA_TUSERDATA {
+                use std::slice;
+                let len = ffi::lua_rawlen(self.lua, idx as c_int) as usize;
+                let ptr = transmute::<*mut c_void, *mut u8>(ffi::lua_touserdata(self.lua, idx as c_int));
+                Ok(slice::from_raw_parts_mut(ptr, len))
+            } else {
+                Err(Error::Type)
+            }
+        }
     }
 
     /// Converts the acceptable index idx into an equivalent absolute index (that is, one that does
@@ -294,7 +371,7 @@ impl State {
 
     /// Returns the `LuaType` of the value in the given valid index, or `None` for a non-valid
     /// (but acceptable) index.
-    pub fn lua_type(&self, idx: i32) -> Option<LuaType> {
+    pub fn type_at(&self, idx: i32) -> Option<LuaType> {
         lua_to_rust_type_checked(unsafe { ffi::lua_type(self.lua, idx) })
     }
 
@@ -400,14 +477,6 @@ impl State {
     /// how many elements the table will have. Otherwise you can use the function `new_table()`.
     pub fn create_table(&mut self, narr: i32, nrec: i32) {
         unsafe { ffi::lua_createtable(self.lua, narr as c_int, nrec as c_int) }
-    }
-
-    /// This function allocates a new block of memory with the given size, pushes onto the stack
-    /// a new full userdata with the block address, and returns this address. The host program can
-    /// freely use this memory.
-    pub fn new_userdata(&mut self, _sz: libc::size_t) {
-        // TODO: newuserdata
-        unimplemented!();
     }
 
     /// If the value at the given index has a metatable, the function pushes that metatable onto
@@ -615,56 +684,6 @@ impl State {
         }
     }
 
-    /// Pushes a native function onto the stack. This function receives a pointer to a native
-    /// function and pushes onto the stack a Lua value of type function that, when called, invokes
-    /// the corresponding native function.
-    ///
-    /// Any function to be callable by Lua must follow the correct protocol to receive its
-    /// parameters and return its results ([see `NativeFunction`](NativeFunction.t.html)).
-    pub fn push_function(&mut self, f: NativeFunction) {
-        self.push_closure(f, 0);
-    }
-
-    /// Pushes a new closure onto the stack. Note that this is *not* a Rust closure, due to
-    /// lifetime tracking limitations.
-    ///
-    /// When a native function is created, it is possible to associate some values with it, thus
-    /// creating a native closure ([see here](https://www.lua.org/manual/5.3/manual.html#4.4));
-    /// these values are then accessible to the function whenever it is called. To associate values
-    /// with a native function, first these values must be pushed onto the stack (when there are
-    /// multiple values, the first value is pushed first). Then `push_closure()` is called to create
-    /// and push the native function onto the stack, with the argument `n` telling how many values
-    /// will be associated with the function. `push_closure()` also pops these values from the
-    /// stack.
-    ///
-    /// The maximum value for n is 254. This differs from standard C Lua, as lowlua needs the first
-    /// index internally.
-    pub fn push_closure(&mut self, f: NativeFunction, n: u32) {
-        extern "C" fn func(lua: *mut ffi::lua_State) -> c_int {
-            unsafe {
-                let f = *transmute::<*mut c_void, *mut NativeFunction>(ffi::lua_touserdata(lua, ffi::lua_upvalueindex(1)));
-                let mut state = State::from_raw_state(lua);
-                f(&mut state) as c_int
-            }
-        }
-
-        unsafe {
-            // Push userdata instead of light userdata, as some platforms may have differing
-            // pointer sizes between functions and variables.
-            use std::mem::size_of;
-            let ud =
-                transmute::<*mut c_void,
-                            *mut NativeFunction>(ffi::lua_newuserdata(self.lua,
-                                                                      size_of::<NativeFunction>()));
-            *ud = f;
-            let n = (n + 1) as i32;
-            if n > 1 {
-                self.insert(n);
-            }
-            ffi::lua_pushcclosure(self.lua, func, n);
-        }
-    }
-
     fn push_boolean(&mut self, b: bool) {
         unsafe { ffi::lua_pushboolean(self.lua, if b { 1 } else { 0 }) }
     }
@@ -731,11 +750,6 @@ impl State {
                 Ok(num as u64)
             }
         }
-    }
-
-    fn _to_userdata(&mut self, _idx: i32) {
-        unimplemented!();
-        // unsafe { ffi::lua_touserdata(self.lua, idx as c_int) }
     }
 
     fn _to_thread(&mut self, _idx: i32) {
