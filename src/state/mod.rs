@@ -6,9 +6,9 @@ use libc;
 use std::{io, ptr};
 use std::ffi::CString;
 use std::mem::transmute;
-use libc::{c_int, c_char, size_t};
+use libc::{c_int, c_char, size_t, c_void};
 
-use super::{Result, Error, LuaType, LuaOperator, LuaCallResults, NativeFunction};
+use super::{Result, Error, LuaType, LuaOperator, LuaCallResults, LuaIndex, NativeFunction};
 
 pub use self::traits::*;
 
@@ -17,6 +17,7 @@ pub use self::traits::*;
 /// See the [module level documentation](index.html) for more details.
 pub struct State {
     lua: *mut ffi::lua_State,
+    should_free: bool,
 }
 
 impl State {
@@ -25,14 +26,14 @@ impl State {
     pub fn new() -> State {
         // Create the Lua state through the FFI
         let lua = unsafe { ffi::lua_newstate(alloc, ptr::null_mut()) };
-        extern "C" fn alloc(_ud: *mut libc::c_void,
-                            ptr: *mut libc::c_void,
+        extern "C" fn alloc(_ud: *mut c_void,
+                            ptr: *mut c_void,
                             _osize: libc::size_t,
                             nsize: libc::size_t)
-                            -> *mut libc::c_void {
+                            -> *mut c_void {
             unsafe {
                 if nsize == 0 {
-                    libc::free(ptr as *mut libc::c_void);
+                    libc::free(ptr as *mut c_void);
                     ptr::null_mut()
                 } else {
                     libc::realloc(ptr, nsize)
@@ -52,7 +53,10 @@ impl State {
             panic!("PANIC: unprotected error in call to Lua API ({})", err);
         }
 
-        State { lua: lua }
+        State {
+            lua: lua,
+            should_free: true,
+        }
     }
 
     /// Opens all standard Lua libraries into the state.
@@ -72,11 +76,11 @@ impl State {
     /// If an error occurs, nothing is pushed to the stack.
     pub fn load_stream<R: io::Read>(&mut self, stream: R, chunkname: &str) -> Result<()> {
         extern "C" fn reader<R: io::Read>(_lua: *mut ffi::lua_State,
-                                data: *mut libc::c_void,
-                                size: *mut size_t)
-                                -> *const c_char {
+                                          data: *mut c_void,
+                                          size: *mut size_t)
+                                          -> *const c_char {
             unsafe {
-                let ref mut rd = *transmute::<*mut libc::c_void, *mut ReaderData<R>>(data);
+                let ref mut rd = *transmute::<*mut c_void, *mut ReaderData<R>>(data);
                 rd.string.truncate(0);
                 rd.stream.read_to_end(&mut rd.string).unwrap();
                 *size = rd.string.len() as size_t;
@@ -97,7 +101,8 @@ impl State {
         let result = unsafe {
             ffi::lua_load(self.lua,
                           reader::<R>,
-                          transmute::<*mut ReaderData<R>, *mut libc::c_void>(&mut data as *mut ReaderData<R>),
+                          transmute::<*mut ReaderData<R>,
+                                      *mut c_void>(&mut data as *mut ReaderData<R>),
                           CString::new(chunkname).unwrap().as_ptr(),
                           ptr::null())
         };
@@ -383,7 +388,7 @@ impl State {
     /// it does not invoke the `__index` metamethod.
     ///
     /// Returns the type of the pushed value.
-    pub fn raw_get_p(&mut self, _idx: i32, _p: *const libc::c_void) -> i32 {
+    pub fn raw_get_p(&mut self, _idx: i32, _p: *const c_void) -> i32 {
         // TODO: rawgetp
         unimplemented!();
     }
@@ -473,7 +478,7 @@ impl State {
     ///
     /// This function pops the value from the stack. The assignment is raw, that is,
     /// it does not invoke the `__newindex` metamethod.
-    pub fn raw_set_p(&mut self, _idx: i32, _p: *const libc::c_void) {
+    pub fn raw_set_p(&mut self, _idx: i32, _p: *const c_void) {
         // TODO: rawsetp
         unimplemented!();
     }
@@ -587,7 +592,10 @@ impl State {
     // This function is needed because it's unfortunately not possible to guarantee a reference
     // to the `State` that called a native function without making State boxed or something.
     fn from_raw_state(state: *mut ffi::lua_State) -> State {
-        State { lua: state }
+        State {
+            lua: state,
+            should_free: false,
+        }
     }
 
     // Push
@@ -607,16 +615,61 @@ impl State {
         }
     }
 
-    // It's not possible to safely push Rust closures without some serious high-level stuff.
-    fn _push_native_function(&mut self, _f: NativeFunction) {
-        unimplemented!();
+    /// Pushes a native function onto the stack. This function receives a pointer to a native
+    /// function and pushes onto the stack a Lua value of type function that, when called, invokes
+    /// the corresponding native function.
+    ///
+    /// Any function to be callable by Lua must follow the correct protocol to receive its
+    /// parameters and return its results ([see `NativeFunction`](NativeFunction.t.html)).
+    pub fn push_function(&mut self, f: NativeFunction) {
+        self.push_closure(f, 0);
+    }
+
+    /// Pushes a new closure onto the stack. Note that this is *not* a Rust closure, due to
+    /// lifetime tracking limitations.
+    ///
+    /// When a native function is created, it is possible to associate some values with it, thus
+    /// creating a native closure ([see here](https://www.lua.org/manual/5.3/manual.html#4.4));
+    /// these values are then accessible to the function whenever it is called. To associate values
+    /// with a native function, first these values must be pushed onto the stack (when there are
+    /// multiple values, the first value is pushed first). Then `push_closure()` is called to create
+    /// and push the native function onto the stack, with the argument `n` telling how many values
+    /// will be associated with the function. `push_closure()` also pops these values from the
+    /// stack.
+    ///
+    /// The maximum value for n is 254. This differs from standard C Lua, as lowlua needs the first
+    /// index internally.
+    pub fn push_closure(&mut self, f: NativeFunction, n: u32) {
+        extern "C" fn func(lua: *mut ffi::lua_State) -> c_int {
+            unsafe {
+                let f = *transmute::<*mut c_void, *mut NativeFunction>(ffi::lua_touserdata(lua, ffi::lua_upvalueindex(1)));
+                let mut state = State::from_raw_state(lua);
+                f(&mut state) as c_int
+            }
+        }
+
+        unsafe {
+            // Push userdata instead of light userdata, as some platforms may have differing
+            // pointer sizes between functions and variables.
+            use std::mem::size_of;
+            let ud =
+                transmute::<*mut c_void,
+                            *mut NativeFunction>(ffi::lua_newuserdata(self.lua,
+                                                                      size_of::<NativeFunction>()));
+            *ud = f;
+            let n = (n + 1) as i32;
+            if n > 1 {
+                self.insert(n);
+            }
+            ffi::lua_pushcclosure(self.lua, func, n);
+        }
     }
 
     fn push_boolean(&mut self, b: bool) {
         unsafe { ffi::lua_pushboolean(self.lua, if b { 1 } else { 0 }) }
     }
 
-    fn _push_light_userdata(&mut self, p: *mut libc::c_void) {
+    fn _push_light_userdata(&mut self, p: *mut c_void) {
         unsafe { ffi::lua_pushlightuserdata(self.lua, p) }
     }
 
@@ -707,7 +760,11 @@ impl State {
 
 impl Drop for State {
     fn drop(&mut self) {
-        unsafe { ffi::lua_close(self.lua) };
+        unsafe {
+            if self.should_free {
+                ffi::lua_close(self.lua);
+            }
+        }
     }
 }
 

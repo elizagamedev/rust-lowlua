@@ -75,6 +75,12 @@ pub enum LuaCallResults {
     MultRet,
 }
 
+/// Used to specify the Lua indexing mode when using functions with multiple indexing modes.
+pub enum LuaIndex {
+    Stack(i32),
+    Upvalue(u32),
+}
+
 /// A result which can return a Lua error.
 pub type Result<T> = result::Result<T, Error>;
 
