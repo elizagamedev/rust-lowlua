@@ -230,21 +230,21 @@ impl State {
     }
 
     /// Get a type from a place on the stack.
-    pub fn at<T: FromLua>(&mut self, idx: i32) -> Result<T> {
+    pub fn at<T: FromLua>(&mut self, idx: LuaIndex) -> Result<T> {
         let top = self.get_top();
-        let result = T::from_lua(self, idx);
+        let result = T::from_lua(self, idx.to_ffi());
         self.set_top(top);
         result
     }
 
     /// Returns the slice of data represented by the userdata at the given index if the value
     /// is userdata. This function does not work with light userdata.
-    pub fn userdata_at(&mut self, idx: i32) -> Result<&mut [u8]> {
+    pub fn userdata_at(&mut self, idx: LuaIndex) -> Result<&mut [u8]> {
         unsafe {
-            if ffi::lua_type(self.lua, idx as c_int) == ffi::LUA_TUSERDATA {
+            if ffi::lua_type(self.lua, idx.to_ffi()) == ffi::LUA_TUSERDATA {
                 use std::slice;
-                let len = ffi::lua_rawlen(self.lua, idx as c_int) as usize;
-                let ptr = transmute::<*mut c_void, *mut u8>(ffi::lua_touserdata(self.lua, idx as c_int));
+                let len = ffi::lua_rawlen(self.lua, idx.to_ffi()) as usize;
+                let ptr = transmute::<*mut c_void, *mut u8>(ffi::lua_touserdata(self.lua, idx.to_ffi()));
                 Ok(slice::from_raw_parts_mut(ptr, len))
             } else {
                 Err(Error::Type)
@@ -273,8 +273,8 @@ impl State {
     }
 
     /// Pushes a copy of the element at the given index onto the stack.
-    pub fn push_value(&mut self, idx: c_int) {
-        unsafe { ffi::lua_pushvalue(self.lua, idx as c_int) }
+    pub fn push_value(&mut self, idx: LuaIndex) {
+        unsafe { ffi::lua_pushvalue(self.lua, idx.to_ffi()) }
     }
 
     /// Rotates the stack elements between the valid index idx and the top of the stack. The
@@ -329,84 +329,84 @@ impl State {
 
     /// Returns `true` if the value at the given index is a number or a string convertible to a
     /// number.
-    pub fn is_number(&self, idx: i32) -> bool {
-        unsafe { ffi::lua_isnumber(self.lua, idx as c_int) != 0 }
+    pub fn is_number(&self, idx: LuaIndex) -> bool {
+        unsafe { ffi::lua_isnumber(self.lua, idx.to_ffi()) != 0 }
     }
 
     /// Returns `true` if the value at the given index is a string or a number (which is always
     /// convertible to a string).
-    pub fn is_string(&self, idx: i32) -> bool {
-        unsafe { ffi::lua_isstring(self.lua, idx as c_int) != 0 }
+    pub fn is_string(&self, idx: LuaIndex) -> bool {
+        unsafe { ffi::lua_isstring(self.lua, idx.to_ffi()) != 0 }
     }
 
     /// Returns `true` if the value at the given index is a native function.
-    pub fn is_native_function(&self, idx: i32) -> bool {
-        unsafe { ffi::lua_iscfunction(self.lua, idx as c_int) != 0 }
+    pub fn is_native_function(&self, idx: LuaIndex) -> bool {
+        unsafe { ffi::lua_iscfunction(self.lua, idx.to_ffi()) != 0 }
     }
 
     /// Returns `true` if the value at the given index is an integer (that is, the value is a number
     /// and is represented as an integer).
-    pub fn is_integer(&self, idx: i32) -> bool {
-        unsafe { ffi::lua_isinteger(self.lua, idx as c_int) != 0 }
+    pub fn is_integer(&self, idx: LuaIndex) -> bool {
+        unsafe { ffi::lua_isinteger(self.lua, idx.to_ffi()) != 0 }
     }
 
     /// Returns `true` if the value at the given index is a userdata (either full or light).
-    pub fn is_userdata(&self, idx: i32) -> bool {
-        unsafe { ffi::lua_isuserdata(self.lua, idx as c_int) != 0 }
+    pub fn is_userdata(&self, idx: LuaIndex) -> bool {
+        unsafe { ffi::lua_isuserdata(self.lua, idx.to_ffi()) != 0 }
     }
 
     /// Returns `true` if the value at the given index is a function (either native or Lua).
-    pub fn is_function(&self, idx: i32) -> bool {
-        unsafe { ffi::lua_isfunction(self.lua, idx as c_int) }
+    pub fn is_function(&self, idx: LuaIndex) -> bool {
+        unsafe { ffi::lua_isfunction(self.lua, idx.to_ffi()) }
     }
 
     /// Returns `true` if the value at the given index is a table.
-    pub fn is_table(&self, idx: i32) -> bool {
-        unsafe { ffi::lua_istable(self.lua, idx as c_int) }
+    pub fn is_table(&self, idx: LuaIndex) -> bool {
+        unsafe { ffi::lua_istable(self.lua, idx.to_ffi()) }
     }
 
     /// Returns `true` if the value at the given index is a light userdata.
-    pub fn is_light_userdata(&self, idx: i32) -> bool {
-        unsafe { ffi::lua_islightuserdata(self.lua, idx as c_int) }
+    pub fn is_light_userdata(&self, idx: LuaIndex) -> bool {
+        unsafe { ffi::lua_islightuserdata(self.lua, idx.to_ffi()) }
     }
 
     /// Returns `true` if the value at the given index is `nil`.
-    pub fn is_nil(&self, idx: i32) -> bool {
-        unsafe { ffi::lua_isnil(self.lua, idx as c_int) }
+    pub fn is_nil(&self, idx: LuaIndex) -> bool {
+        unsafe { ffi::lua_isnil(self.lua, idx.to_ffi()) }
     }
 
     /// Returns `true` if the value at the given index is a boolean.
-    pub fn is_boolean(&self, idx: i32) -> bool {
-        unsafe { ffi::lua_isboolean(self.lua, idx as c_int) }
+    pub fn is_boolean(&self, idx: LuaIndex) -> bool {
+        unsafe { ffi::lua_isboolean(self.lua, idx.to_ffi()) }
     }
 
     /// Returns `true` if the value at the given index is a thread.
-    pub fn is_thread(&self, idx: i32) -> bool {
-        unsafe { ffi::lua_isthread(self.lua, idx as c_int) }
+    pub fn is_thread(&self, idx: LuaIndex) -> bool {
+        unsafe { ffi::lua_isthread(self.lua, idx.to_ffi()) }
     }
 
     /// Returns `true` if the given index is not valid.
-    pub fn is_none(&self, idx: i32) -> bool {
-        unsafe { ffi::lua_isnone(self.lua, idx as c_int) }
+    pub fn is_none(&self, idx: LuaIndex) -> bool {
+        unsafe { ffi::lua_isnone(self.lua, idx.to_ffi()) }
     }
 
     /// Returns `true` if the given index is not valid or if the value at this index is `nil`.
-    pub fn is_none_or_nil(&self, idx: i32) -> bool {
-        unsafe { ffi::lua_isnoneornil(self.lua, idx as c_int) }
+    pub fn is_none_or_nil(&self, idx: LuaIndex) -> bool {
+        unsafe { ffi::lua_isnoneornil(self.lua, idx.to_ffi()) }
     }
 
     /// Returns the `LuaType` of the value in the given valid index, or `None` for a non-valid
     /// (but acceptable) index.
-    pub fn type_at(&self, idx: i32) -> Option<LuaType> {
-        lua_to_rust_type_checked(unsafe { ffi::lua_type(self.lua, idx) })
+    pub fn type_at(&self, idx: LuaIndex) -> Option<LuaType> {
+        lua_to_rust_type_checked(unsafe { ffi::lua_type(self.lua, idx.to_ffi()) })
     }
 
     /// Returns the raw "length" of the value at the given index: for strings, this is the string
     /// length; for tables, this is the result of the length operator ('#') with no metamethods;
     /// for userdata, this is the size of the block of memory allocated for the userdata; for other
     /// values, it is 0.
-    pub fn raw_len(&self, idx: i32) -> usize {
-        unsafe { ffi::lua_rawlen(self.lua, idx as c_int) as usize }
+    pub fn raw_len(&self, idx: LuaIndex) -> usize {
+        unsafe { ffi::lua_rawlen(self.lua, idx.to_ffi()) as usize }
     }
 
     /// Performs an arithmetic or bitwise operation over the two values (or one, in the case of
@@ -420,16 +420,16 @@ impl State {
     /// Returns `true` if the two values in indices `idx1` and `idx2` are primitively equal
     /// (that is, without calling the `__eq` metamethod). Otherwise returns `false`.
     /// Also returns `false` if any of the indices are not valid.
-    pub fn raw_equal(&self, idx1: i32, idx2: i32) -> bool {
-        unsafe { ffi::lua_rawequal(self.lua, idx1 as c_int, idx2 as c_int) != 0 }
+    pub fn raw_equal(&self, idx1: LuaIndex, idx2: LuaIndex) -> bool {
+        unsafe { ffi::lua_rawequal(self.lua, idx1.to_ffi(), idx2.to_ffi()) != 0 }
     }
 
     /// Compares two Lua values. Returns `true` if the value at index `idx1` satisfies `op`
     /// when compared with the value at index `idx2`, following the semantics of the corresponding
     /// Lua operator (that is, it may call metamethods). Otherwise returns `false`.
     /// Also returns `false` if any of the indices is not valid.
-    pub fn compare(&mut self, idx1: i32, idx2: i32, op: LuaOperator) -> bool {
-        unsafe { ffi::lua_compare(self.lua, idx1 as c_int, idx2 as c_int, rust_to_lua_op(op)) != 0 }
+    pub fn compare(&mut self, idx1: LuaIndex, idx2: LuaIndex, op: LuaOperator) -> bool {
+        unsafe { ffi::lua_compare(self.lua, idx1.to_ffi(), idx2.to_ffi(), rust_to_lua_op(op)) != 0 }
     }
 
     /// Pushes onto the stack the value of the global `name`. Returns the `LuaType` of that value.
@@ -447,8 +447,8 @@ impl State {
     /// (see [here](https://www.lua.org/manual/5.3/manual.html#2.4)).
     ///
     /// Returns the `LuaType` of the pushed value.
-    pub fn get_table(&mut self, idx: i32) -> LuaType {
-        lua_to_rust_type(unsafe { ffi::lua_gettable(self.lua, idx as c_int) })
+    pub fn get_table(&mut self, idx: LuaIndex) -> LuaType {
+        lua_to_rust_type(unsafe { ffi::lua_gettable(self.lua, idx.to_ffi()) })
     }
 
     /// Pushes onto the stack the value `t[k]`, where `t` is the value at the given index.
@@ -456,9 +456,9 @@ impl State {
     /// (see [here](https://www.lua.org/manual/5.3/manual.html#2.4)).
     ///
     /// Returns the `LuaType` of the pushed value.
-    pub fn get_field(&mut self, idx: i32, k: &str) -> LuaType {
+    pub fn get_field(&mut self, idx: LuaIndex, k: &str) -> LuaType {
         lua_to_rust_type(unsafe {
-            ffi::lua_getfield(self.lua, idx as c_int, CString::new(k).unwrap().as_ptr()) as i32
+            ffi::lua_getfield(self.lua, idx.to_ffi(), CString::new(k).unwrap().as_ptr()) as i32
         })
     }
 
@@ -467,23 +467,23 @@ impl State {
     /// (see [here](https://www.lua.org/manual/5.3/manual.html#2.4)).
     ///
     /// Returns the `LuaType` of the pushed value.
-    pub fn get_i(&mut self, idx: i32, n: i64) -> LuaType {
-        lua_to_rust_type(unsafe { ffi::lua_geti(self.lua, idx as c_int, n as ffi::lua_Integer) })
+    pub fn get_i(&mut self, idx: LuaIndex, n: i64) -> LuaType {
+        lua_to_rust_type(unsafe { ffi::lua_geti(self.lua, idx.to_ffi(), n as ffi::lua_Integer) })
     }
 
     /// Similar to `get_table()`, but does a raw access (i.e., without metamethods).
     ///
     /// Returns the `LuaType` of the pushed value.
-    pub fn raw_get(&mut self, idx: i32) -> LuaType {
-        lua_to_rust_type(unsafe { ffi::lua_rawget(self.lua, idx as c_int) })
+    pub fn raw_get(&mut self, idx: LuaIndex) -> LuaType {
+        lua_to_rust_type(unsafe { ffi::lua_rawget(self.lua, idx.to_ffi()) })
     }
 
     /// Pushes onto the stack the value `t[n]`, where `t` is the table at the given index.
     /// The access is raw, that is, it does not invoke the `__index` metamethod.
     ///
     /// Returns the `LuaType` of the pushed value.
-    pub fn raw_get_i(&mut self, idx: i32, n: i32) -> LuaType {
-        lua_to_rust_type(unsafe { ffi::lua_rawgeti(self.lua, idx as c_int, n as c_int) })
+    pub fn raw_get_i(&mut self, idx: LuaIndex, n: i32) -> LuaType {
+        lua_to_rust_type(unsafe { ffi::lua_rawgeti(self.lua, idx.to_ffi(), n as c_int) })
     }
 
     /// Pushes onto the stack the value `t[k]`, where `t` is the table at the given index and
@@ -491,10 +491,10 @@ impl State {
     /// it does not invoke the `__index` metamethod.
     ///
     /// Returns the type of the pushed value.
-    pub fn raw_get_p<T>(&mut self, idx: i32, p: *const T) -> LuaType {
+    pub fn raw_get_p<T>(&mut self, idx: LuaIndex, p: *const T) -> LuaType {
         unsafe {
             let p = transmute::<*const T, *const c_void>(p);
-            lua_to_rust_type(ffi::lua_rawgetp(self.lua, idx, p))
+            lua_to_rust_type(ffi::lua_rawgetp(self.lua, idx.to_ffi(), p))
         }
     }
 
@@ -516,15 +516,15 @@ impl State {
     /// If the value at the given index has a metatable, the function pushes that metatable onto
     /// the stack and returns `true`. Otherwise, the function returns `false` and pushes nothing
     /// on the stack.
-    pub fn get_metatable(&mut self, objindex: i32) -> bool {
-        unsafe { ffi::lua_getmetatable(self.lua, objindex as c_int) != 0 }
+    pub fn get_metatable(&mut self, objindex: LuaIndex) -> bool {
+        unsafe { ffi::lua_getmetatable(self.lua, objindex.to_ffi()) != 0 }
     }
 
     /// Pushes onto the stack the Lua value associated with the userdata at the given index.
     ///
     /// Returns the type of the pushed value.
-    pub fn get_user_value(&mut self, idx: i32) -> LuaType {
-        lua_to_rust_type(unsafe { ffi::lua_getuservalue(self.lua, idx as c_int) })
+    pub fn get_user_value(&mut self, idx: LuaIndex) -> LuaType {
+        lua_to_rust_type(unsafe { ffi::lua_getuservalue(self.lua, idx.to_ffi()) })
     }
 
     /// Pushes our registry table onto the stack. When the Lua state is crated, a table is
@@ -547,8 +547,8 @@ impl State {
     /// This function pops both the key and the value from the stack. As in Lua, this function may
     /// trigger a metamethod for the "newindex" event
     /// (see [here](https://www.lua.org/manual/5.3/manual.html#2.4)).
-    pub fn set_table(&mut self, idx: i32) {
-        unsafe { ffi::lua_settable(self.lua, idx as c_int) }
+    pub fn set_table(&mut self, idx: LuaIndex) {
+        unsafe { ffi::lua_settable(self.lua, idx.to_ffi()) }
     }
 
     /// Does the equivalent to `t[k] = v`, where `t` is the value at the given index and `v` is the
@@ -557,8 +557,8 @@ impl State {
     /// This function pops the value from the stack. As in Lua, this function may trigger a
     /// metamethod for the "newindex" event
     /// (see [here](https://www.lua.org/manual/5.3/manual.html#2.4)).
-    pub fn set_field(&mut self, idx: i32, k: &str) {
-        unsafe { ffi::lua_setfield(self.lua, idx as c_int, CString::new(k).unwrap().as_ptr()) }
+    pub fn set_field(&mut self, idx: LuaIndex, k: &str) {
+        unsafe { ffi::lua_setfield(self.lua, idx.to_ffi(), CString::new(k).unwrap().as_ptr()) }
     }
 
     /// Does the equivalent to `t[n] = v`, where `t` is the value at the given index and
@@ -567,22 +567,22 @@ impl State {
     /// This function pops the value from the stack. As in Lua, this function may trigger a
     /// metamethod for the "newindex" event
     /// (see [here](https://www.lua.org/manual/5.3/manual.html#2.4)).
-    pub fn set_i(&mut self, idx: i32, n: i64) {
-        unsafe { ffi::lua_seti(self.lua, idx as c_int, n as ffi::lua_Integer) }
+    pub fn set_i(&mut self, idx: LuaIndex, n: i64) {
+        unsafe { ffi::lua_seti(self.lua, idx.to_ffi(), n as ffi::lua_Integer) }
     }
 
     /// Similar to `set_table()`, but does a raw assignment (i.e., without metamethods).
-    pub fn raw_set(&mut self, idx: i32) {
-        unsafe { ffi::lua_rawset(self.lua, idx as c_int) }
+    pub fn raw_set(&mut self, idx: LuaIndex) {
+        unsafe { ffi::lua_rawset(self.lua, idx.to_ffi()) }
     }
 
-    /// Does the equivalent of `t[i] = v`, where `t` is the table at the given index and
+    /// Does the equivalent of `t[n] = v`, where `t` is the table at the given index and
     /// `v` is the value at the top of the stack.
     ///
     /// This function pops the value from the stack. The assignment is raw, that is,
     /// it does not invoke the `__newindex` metamethod.
-    pub fn raw_set_i(&mut self, idx: i32, n: i32) {
-        unsafe { ffi::lua_rawseti(self.lua, idx as c_int, n as c_int) }
+    pub fn raw_set_i(&mut self, idx: LuaIndex, n: i32) {
+        unsafe { ffi::lua_rawseti(self.lua, idx.to_ffi(), n as c_int) }
     }
 
     /// Does the equivalent of `t[p] = v`, where `t` is the table at the given index,
@@ -590,23 +590,23 @@ impl State {
     ///
     /// This function pops the value from the stack. The assignment is raw, that is,
     /// it does not invoke the `__newindex` metamethod.
-    pub fn raw_set_p<T>(&mut self, idx: i32, p: *const T) {
+    pub fn raw_set_p<T>(&mut self, idx: LuaIndex, p: *const T) {
         unsafe {
             let p = transmute::<*const T, *const c_void>(p);
-            ffi::lua_rawsetp(self.lua, idx, p);
+            ffi::lua_rawsetp(self.lua, idx.to_ffi(), p);
         }
     }
 
     /// Pops a table from the stack and sets it as the new metatable for the value at the
     /// given index.
-    pub fn set_metatable(&mut self, objindex: i32) {
-        unsafe { ffi::lua_setmetatable(self.lua, objindex as c_int) };
+    pub fn set_metatable(&mut self, objindex: LuaIndex) {
+        unsafe { ffi::lua_setmetatable(self.lua, objindex.to_ffi()) };
     }
 
     /// Pops a value from the stack and sets it as the new value associated to the userdata at the
     /// given index.
-    pub fn set_user_value(&mut self, idx: i32) {
-        unsafe { ffi::lua_setuservalue(self.lua, idx as c_int) }
+    pub fn set_user_value(&mut self, idx: LuaIndex) {
+        unsafe { ffi::lua_setuservalue(self.lua, idx.to_ffi()) }
     }
 
     /// Sets the native function `f` as the new value of global `name`.
@@ -667,8 +667,8 @@ impl State {
     /// While traversing a table, do not call `as::<String>()` directly on a key, unless you know
     /// that the key is actually a string. Recall that `as::<String>()` may change the value at the
     /// given index; this confuses the next call to `next()`.
-    pub fn next(&mut self, idx: i32) -> bool {
-        unsafe { ffi::lua_next(self.lua, idx as c_int) != 0 }
+    pub fn next(&mut self, idx: LuaIndex) -> bool {
+        unsafe { ffi::lua_next(self.lua, idx.to_ffi()) != 0 }
     }
 
     /// Concatenates the `n` values at the top of the stack, pops them, and leaves the result at
@@ -685,8 +685,8 @@ impl State {
     /// and may trigger a metamethod for the "length" event
     /// ([see here](https://www.lua.org/manual/5.3/manual.html#2.4)).
     /// The result is pushed on the stack.
-    pub fn len(&mut self, idx: i32) {
-        unsafe { ffi::lua_len(self.lua, idx as c_int) }
+    pub fn len(&mut self, idx: LuaIndex) {
+        unsafe { ffi::lua_len(self.lua, idx.to_ffi()) }
     }
 
     /// Converts the string `s` to a number, pushes that number into the stack, and returns `true`.

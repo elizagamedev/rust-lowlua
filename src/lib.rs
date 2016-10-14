@@ -79,6 +79,17 @@ pub enum LuaCallResults {
 pub enum LuaIndex {
     Stack(i32),
     Upvalue(u32),
+    Registry,
+}
+
+impl LuaIndex {
+    fn to_ffi(&self) -> libc::c_int {
+        match *self {
+            LuaIndex::Stack(val) => val,
+            LuaIndex::Upvalue(val) => ffi::lua_upvalueindex(val as i32),
+            LuaIndex::Registry => ffi::LUA_REGISTRYINDEX,
+        }
+    }
 }
 
 /// A result which can return a Lua error.
