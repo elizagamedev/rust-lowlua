@@ -199,7 +199,7 @@ impl State {
             *ud = f;
             let n = (n + 1) as i32;
             if n > 1 {
-                self.insert(n);
+                self.insert(-n);
             }
             ffi::lua_pushcclosure(self.lua, func, n);
         }
