@@ -483,6 +483,12 @@ impl State {
         unimplemented!();
     }
 
+    /// Creates a new empty table and pushes it onto the stack.
+    /// It is equivalent to `create_table(0, 0)`
+    pub fn new_table(&mut self) {
+        unsafe { ffi::lua_newtable(self.lua) };
+    }
+
     /// Creates a new empty table and pushes it onto the stack. Parameter `narr` is a hint for
     /// how many elements the table will have as a sequence; parameter `nrec` is a hint for how
     /// many other elements the table will have. Lua may use these hints to preallocate memory
