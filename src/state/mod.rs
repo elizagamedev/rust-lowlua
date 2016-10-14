@@ -64,7 +64,8 @@ impl State {
         // usage of an address for the key of a registry table was recommended by the Lua 5.3
         // reference manual.
         unsafe {
-            let extraspace = transmute::<*mut c_void, *mut *mut c_void>(ffi::lua_getextraspace(state.lua));
+            let extraspace = transmute::<*mut c_void,
+                                         *mut *mut c_void>(ffi::lua_getextraspace(state.lua));
             *extraspace = transmute::<*mut State, *mut c_void>(&mut state as *mut State);
             ffi::lua_newtable(state.lua);
             ffi::lua_rawsetp(state.lua, ffi::LUA_REGISTRYINDEX, *extraspace);
@@ -192,9 +193,9 @@ impl State {
             // pointer sizes between functions and variables.
             use std::mem::size_of;
             let ud =
-            transmute::<*mut c_void,
-                *mut NativeFunction>(ffi::lua_newuserdata(self.lua,
-                                                          size_of::<NativeFunction>()));
+                transmute::<*mut c_void,
+                            *mut NativeFunction>(ffi::lua_newuserdata(self.lua,
+                                                                      size_of::<NativeFunction>()));
             *ud = f;
             let n = (n + 1) as i32;
             if n > 1 {
@@ -211,7 +212,9 @@ impl State {
         unsafe {
             use std::slice;
             let ptr = ffi::lua_newuserdata(self.lua, data.len() as size_t);
-            libc::memcpy(ptr, transmute::<*const u8, *const c_void>(data.as_ptr()), data.len());
+            libc::memcpy(ptr,
+                         transmute::<*const u8, *const c_void>(data.as_ptr()),
+                         data.len());
             slice::from_raw_parts_mut(transmute::<*mut c_void, *mut u8>(ptr), data.len())
         }
     }
@@ -229,6 +232,11 @@ impl State {
         }
     }
 
+    /// Pushes a `nil` value onto the stack.
+    pub fn push_nil(&mut self) {
+        unsafe { ffi::lua_pushnil(self.lua) }
+    }
+
     /// Get a type from a place on the stack.
     pub fn at<T: FromLua>(&mut self, idx: LuaIndex) -> Result<T> {
         let top = self.get_top();
@@ -244,7 +252,8 @@ impl State {
             if ffi::lua_type(self.lua, idx.to_ffi()) == ffi::LUA_TUSERDATA {
                 use std::slice;
                 let len = ffi::lua_rawlen(self.lua, idx.to_ffi()) as usize;
-                let ptr = transmute::<*mut c_void, *mut u8>(ffi::lua_touserdata(self.lua, idx.to_ffi()));
+                let ptr = transmute::<*mut c_void, *mut u8>(ffi::lua_touserdata(self.lua,
+                                                                                idx.to_ffi()));
                 Ok(slice::from_raw_parts_mut(ptr, len))
             } else {
                 Err(Error::Type)
@@ -543,7 +552,8 @@ impl State {
     /// automatically allocated in the registry that can be freely used by the program.
     pub fn get_registry(&mut self) {
         unsafe {
-            let extraspace = transmute::<*mut c_void, *const *mut c_void>(ffi::lua_getextraspace(self.lua));
+            let extraspace = transmute::<*mut c_void,
+                                         *const *mut c_void>(ffi::lua_getextraspace(self.lua));
             ffi::lua_rawgetp(self.lua, ffi::LUA_REGISTRYINDEX, *extraspace);
         }
     }
