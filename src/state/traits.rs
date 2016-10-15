@@ -1,6 +1,6 @@
 use std::convert::TryFrom;
 use state::State;
-use ::{Result, Error};
+use ::{Result, Error, LuaIndex};
 
 /// A conversion of a type into a Lua representation.
 ///
@@ -19,7 +19,7 @@ pub trait ToLua {
 /// reset the top of the stack as a weak safety guarantee. Note that `from_lua()` should *not* remove
 /// the original value from the stack.
 pub trait FromLua: Sized {
-    fn from_lua(state: &mut State, idx: i32) -> Result<Self>;
+    fn from_lua(state: &mut State, idx: LuaIndex) -> Result<Self>;
 }
 
 // Some standard implementations of the traits follow
@@ -111,74 +111,74 @@ impl<'a> ToLua for &'a str {
 
 // From
 impl FromLua for u8 {
-    fn from_lua(state: &mut State, idx: i32) -> Result<u8> {
+    fn from_lua(state: &mut State, idx: LuaIndex) -> Result<u8> {
         Ok(try!(u8::try_from(try!(state.to_unsigned(idx))).map_err(|_| Error::Type)))
     }
 }
 
 impl FromLua for u16 {
-    fn from_lua(state: &mut State, idx: i32) -> Result<u16> {
+    fn from_lua(state: &mut State, idx: LuaIndex) -> Result<u16> {
         Ok(try!(u16::try_from(try!(state.to_unsigned(idx))).map_err(|_| Error::Type)))
     }
 }
 
 impl FromLua for u32 {
-    fn from_lua(state: &mut State, idx: i32) -> Result<u32> {
+    fn from_lua(state: &mut State, idx: LuaIndex) -> Result<u32> {
         Ok(try!(u32::try_from(try!(state.to_unsigned(idx))).map_err(|_| Error::Type)))
     }
 }
 
 impl FromLua for u64 {
-    fn from_lua(state: &mut State, idx: i32) -> Result<u64> {
+    fn from_lua(state: &mut State, idx: LuaIndex) -> Result<u64> {
         state.to_unsigned(idx)
     }
 }
 
 impl FromLua for i8 {
-    fn from_lua(state: &mut State, idx: i32) -> Result<i8> {
+    fn from_lua(state: &mut State, idx: LuaIndex) -> Result<i8> {
         Ok(try!(i8::try_from(try!(state.to_integer(idx))).map_err(|_| Error::Type)))
     }
 }
 
 impl FromLua for i16 {
-    fn from_lua(state: &mut State, idx: i32) -> Result<i16> {
+    fn from_lua(state: &mut State, idx: LuaIndex) -> Result<i16> {
         Ok(try!(i16::try_from(try!(state.to_integer(idx))).map_err(|_| Error::Type)))
     }
 }
 
 impl FromLua for i32 {
-    fn from_lua(state: &mut State, idx: i32) -> Result<i32> {
+    fn from_lua(state: &mut State, idx: LuaIndex) -> Result<i32> {
         Ok(try!(i32::try_from(try!(state.to_integer(idx))).map_err(|_| Error::Type)))
     }
 }
 
 impl FromLua for i64 {
-    fn from_lua(state: &mut State, idx: i32) -> Result<i64> {
+    fn from_lua(state: &mut State, idx: LuaIndex) -> Result<i64> {
         state.to_integer(idx)
     }
 }
 
 impl FromLua for f32 {
-    fn from_lua(state: &mut State, idx: i32) -> Result<f32> {
+    fn from_lua(state: &mut State, idx: LuaIndex) -> Result<f32> {
         // FIXME: f32 doesn't implement try_from
         Ok(try!(state.to_number(idx)) as f32)
     }
 }
 
 impl FromLua for f64 {
-    fn from_lua(state: &mut State, idx: i32) -> Result<f64> {
+    fn from_lua(state: &mut State, idx: LuaIndex) -> Result<f64> {
         state.to_number(idx)
     }
 }
 
 impl FromLua for bool {
-    fn from_lua(state: &mut State, idx: i32) -> Result<bool> {
+    fn from_lua(state: &mut State, idx: LuaIndex) -> Result<bool> {
         Ok(state.to_boolean(idx))
     }
 }
 
 impl FromLua for String {
-    fn from_lua(state: &mut State, idx: i32) -> Result<String> {
+    fn from_lua(state: &mut State, idx: LuaIndex) -> Result<String> {
         state.to_string(idx)
     }
 }

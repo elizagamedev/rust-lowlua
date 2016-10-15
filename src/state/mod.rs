@@ -49,7 +49,7 @@ impl State {
         unsafe { ffi::lua_atpanic(lua, panic) };
         extern "C" fn panic(lua: *mut ffi::lua_State) -> c_int {
             let mut state = State::from_raw_state(lua);
-            let err = state.to_string(-1).unwrap();
+            let err = state.to_string(LuaIndex::Stack(-1)).unwrap();
             panic!("PANIC: unprotected error in call to Lua API ({})", err);
         }
 
@@ -255,7 +255,7 @@ impl State {
     /// Get a type from a place on the stack.
     pub fn at<T: FromLua>(&mut self, idx: LuaIndex) -> Result<T> {
         let top = self.get_top();
-        let result = T::from_lua(self, idx.to_ffi());
+        let result = T::from_lua(self, idx);
         self.set_top(top);
         result
     }
@@ -776,10 +776,10 @@ impl State {
 
     // To
 
-    fn to_number(&mut self, idx: i32) -> Result<f64> {
+    fn to_number(&mut self, idx: LuaIndex) -> Result<f64> {
         unsafe {
             let mut isnum: c_int = 0;
-            let num = ffi::lua_tonumberx(self.lua, idx as c_int, &mut isnum as *mut c_int);
+            let num = ffi::lua_tonumberx(self.lua, idx.to_ffi(), &mut isnum as *mut c_int);
             if isnum == 0 {
                 Err(Error::Type)
             } else {
@@ -788,10 +788,10 @@ impl State {
         }
     }
 
-    fn to_integer(&mut self, idx: i32) -> Result<i64> {
+    fn to_integer(&mut self, idx: LuaIndex) -> Result<i64> {
         unsafe {
             let mut isnum: c_int = 0;
-            let num = ffi::lua_tointegerx(self.lua, idx as c_int, &mut isnum as *mut c_int);
+            let num = ffi::lua_tointegerx(self.lua, idx.to_ffi(), &mut isnum as *mut c_int);
             if isnum == 0 {
                 Err(Error::Type)
             } else {
@@ -800,14 +800,14 @@ impl State {
         }
     }
 
-    fn to_boolean(&mut self, idx: i32) -> bool {
-        unsafe { ffi::lua_toboolean(self.lua, idx as c_int) != 0 }
+    fn to_boolean(&mut self, idx: LuaIndex) -> bool {
+        unsafe { ffi::lua_toboolean(self.lua, idx.to_ffi()) != 0 }
     }
 
-    fn to_string(&mut self, idx: i32) -> Result<String> {
+    fn to_string(&mut self, idx: LuaIndex) -> Result<String> {
         unsafe {
             let mut len: size_t = 0;
-            let cstr = ffi::lua_tolstring(self.lua, idx as c_int, &mut len as *mut size_t);
+            let cstr = ffi::lua_tolstring(self.lua, idx.to_ffi(), &mut len as *mut size_t);
             if cstr.is_null() {
                 Err(Error::Type)
             } else {
@@ -818,10 +818,10 @@ impl State {
         }
     }
 
-    fn to_unsigned(&mut self, idx: i32) -> Result<u64> {
+    fn to_unsigned(&mut self, idx: LuaIndex) -> Result<u64> {
         unsafe {
             let mut isnum: c_int = 0;
-            let num = ffi::lua_tounsignedx(self.lua, idx as c_int, &mut isnum as *mut c_int);
+            let num = ffi::lua_tounsignedx(self.lua, idx.to_ffi(), &mut isnum as *mut c_int);
             if isnum == 0 {
                 Err(Error::Type)
             } else {
