@@ -156,6 +156,7 @@ impl State {
         let errfunc_idx = self.abs_index(-(nargs as i32) - 2);
         self.insert(errfunc_idx);
         let result = unsafe { ffi::lua_pcall(self.lua, nargs as c_int, nresults, errfunc_idx) };
+        self.remove(errfunc_idx);
         self.lua_to_rust_result(result)
     }
 
