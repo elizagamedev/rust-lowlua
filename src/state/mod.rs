@@ -75,7 +75,7 @@ impl State {
             ffi::lua_rawsetp(state.lua, ffi::LUA_REGISTRYINDEX, *extraspace);
         }
 
-        extern "C" fn errfunc(lua: *mut ffi::lua_State) -> c_int {
+        extern "C" fn errfunc(_lua: *mut ffi::lua_State) -> c_int {
             // TODO: traceback
             1
         }
@@ -199,7 +199,15 @@ impl State {
             unsafe {
                 let f = *transmute::<*mut c_void, *mut NativeFunction>(ffi::lua_touserdata(lua, ffi::lua_upvalueindex(1)));
                 let mut state = State::from_raw_state(lua);
-                f(&mut state) as c_int
+                match f(&mut state) {
+                    Ok(val) => val as c_int,
+                    Err(err) => {
+                        // TODO: improve error passing from Rust to Lua back to Rust
+                        state.push(format!("{}", err)).unwrap();
+                        ffi::lua_error(state.lua);
+                        unreachable!();
+                    }
+                }
             }
         }
 

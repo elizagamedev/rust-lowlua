@@ -109,6 +109,13 @@ impl<'a> ToLua for &'a str {
     }
 }
 
+impl<'a> ToLua for String {
+    fn to_lua(&self, state: &mut State) -> Result<()> {
+        state.push_string(self);
+        Ok(())
+    }
+}
+
 // From
 impl FromLua for u8 {
     fn from_lua(state: &mut State, idx: LuaIndex) -> Result<u8> {

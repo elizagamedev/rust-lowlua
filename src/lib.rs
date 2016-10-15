@@ -20,7 +20,7 @@ pub use state::*;
 /// in direct order (the first result is pushed first), and returns the number of results.
 /// Any other value in the stack below the results will be properly discarded by Lua.
 /// Like a Lua function, a native function called by Lua can also return many results.
-pub type NativeFunction = fn(&mut State) -> u32;
+pub type NativeFunction = fn(&mut State) -> Result<u32>;
 
 /// Enum of native Lua types.
 #[derive(Debug)]
