@@ -78,6 +78,8 @@ pub enum LuaCallResults {
 }
 
 /// Used to specify the Lua indexing mode when using functions with multiple indexing modes.
+#[derive(Copy)]
+#[derive(Clone)]
 pub enum LuaIndex {
     Stack(i32),
     Upvalue(u32),
