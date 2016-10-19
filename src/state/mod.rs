@@ -8,7 +8,7 @@ use std::ffi::CString;
 use std::mem::transmute;
 use libc::{c_int, c_char, size_t, c_void};
 
-use super::{Result, Error, LuaType, LuaOperator, LuaCallResults, LuaIndex, NativeFunction};
+use super::{Result, Error, LuaType, LuaOperator, LuaCallResults, LuaIndex, LuaString, NativeFunction};
 
 pub use self::traits::*;
 
@@ -72,6 +72,8 @@ impl State {
             ffi::lua_newtable(state.lua);
             ffi::lua_pushcfunction(state.lua, errfunc);
             ffi::lua_setfield(state.lua, -2, CString::new("errfunc").unwrap().as_ptr());
+            ffi::lua_newtable(state.lua);
+            ffi::lua_setfield(state.lua, -2, CString::new("string").unwrap().as_ptr());
             ffi::lua_rawsetp(state.lua, ffi::LUA_REGISTRYINDEX, *extraspace);
         }
 
@@ -744,6 +746,20 @@ impl State {
         unsafe { ffi::lua_stringtonumber(self.lua, CString::new(s).unwrap().as_ptr()) != 0 }
     }
 
+    /// Creates a LuaString from the passed value. This value is interned and stored in the registry
+    /// indefinitely.
+    pub fn intern(&mut self, s: &str) -> LuaString {
+        self.get_registry();
+        self.get_field(LuaIndex::Stack(-1), "string");
+        self.push_string(s);
+        let val = self.to_string_ptr(LuaIndex::Stack(-1)).unwrap() as usize;
+        self.push_unsigned(val as u64);
+        self.insert(-2);
+        self.raw_set(LuaIndex::Stack(-3));
+        self.pop(2);
+        LuaString(val)
+    }
+
 
 
     // Internal
@@ -822,6 +838,17 @@ impl State {
                 use std::slice;
                 let cstr = transmute::<*const c_char, *const u8>(cstr);
                 Ok(try!(String::from_utf8(slice::from_raw_parts::<u8>(cstr, len).to_vec())))
+            }
+        }
+    }
+
+    fn to_string_ptr(&mut self, idx: LuaIndex) -> Result<*const c_char> {
+        unsafe {
+            let ptr = ffi::lua_tostring(self.lua, idx.to_ffi());
+            if ptr.is_null() {
+                Err(Error::Type)
+            } else {
+                Ok(ptr)
             }
         }
     }

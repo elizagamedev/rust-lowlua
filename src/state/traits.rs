@@ -1,6 +1,6 @@
 use std::convert::TryFrom;
 use state::State;
-use ::{Result, Error, LuaIndex};
+use ::{Result, Error, LuaIndex, LuaString};
 
 /// A conversion of a type into a Lua representation.
 ///
@@ -53,6 +53,13 @@ impl ToLua for u64 {
     }
 }
 
+impl ToLua for usize {
+    fn to_lua(&self, state: &mut State) -> Result<()> {
+        state.push_unsigned(*self as u64);
+        Ok(())
+    }
+}
+
 impl ToLua for i8 {
     fn to_lua(&self, state: &mut State) -> Result<()> {
         state.push_integer(*self as i64);
@@ -77,6 +84,13 @@ impl ToLua for i32 {
 impl ToLua for i64 {
     fn to_lua(&self, state: &mut State) -> Result<()> {
         state.push_integer(*self);
+        Ok(())
+    }
+}
+
+impl ToLua for isize {
+    fn to_lua(&self, state: &mut State) -> Result<()> {
+        state.push_integer(*self as i64);
         Ok(())
     }
 }
@@ -116,6 +130,18 @@ impl<'a> ToLua for String {
     }
 }
 
+impl ToLua for LuaString {
+    fn to_lua(&self, state: &mut State) -> Result<()> {
+        state.get_registry();
+        state.get_field(LuaIndex::Stack(-1), "string");
+        state.remove(-2);
+        try!(state.push(self.0));
+        state.raw_get(LuaIndex::Stack(-2));
+        state.remove(-2);
+        Ok(())
+    }
+}
+
 // From
 impl FromLua for u8 {
     fn from_lua(state: &mut State, idx: LuaIndex) -> Result<u8> {
@@ -138,6 +164,12 @@ impl FromLua for u32 {
 impl FromLua for u64 {
     fn from_lua(state: &mut State, idx: LuaIndex) -> Result<u64> {
         state.to_unsigned(idx)
+    }
+}
+
+impl FromLua for usize {
+    fn from_lua(state: &mut State, idx: LuaIndex) -> Result<usize> {
+        Ok(try!(usize::try_from(try!(state.to_unsigned(idx))).map_err(|_| Error::Type)))
     }
 }
 
@@ -165,6 +197,12 @@ impl FromLua for i64 {
     }
 }
 
+impl FromLua for isize {
+    fn from_lua(state: &mut State, idx: LuaIndex) -> Result<isize> {
+        Ok(try!(isize::try_from(try!(state.to_integer(idx))).map_err(|_| Error::Type)))
+    }
+}
+
 impl FromLua for f32 {
     fn from_lua(state: &mut State, idx: LuaIndex) -> Result<f32> {
         // FIXME: f32 doesn't implement try_from
@@ -187,5 +225,19 @@ impl FromLua for bool {
 impl FromLua for String {
     fn from_lua(state: &mut State, idx: LuaIndex) -> Result<String> {
         state.to_string(idx)
+    }
+}
+
+impl FromLua for LuaString {
+    fn from_lua(state: &mut State, idx: LuaIndex) -> Result<LuaString> {
+        let val = try!(state.to_string_ptr(idx)) as usize;
+        // Record a reference to the string
+        state.get_registry();
+        state.get_field(LuaIndex::Stack(-1), "string");
+        try!(state.push(val));
+        state.push_value(idx);
+        state.raw_set(LuaIndex::Stack(-3));
+        state.pop(2);
+        Ok(LuaString(val))
     }
 }

@@ -96,6 +96,11 @@ impl LuaIndex {
     }
 }
 
+/// An interned Lua string. Guaranteed not to be garbage collected, as a reference to the string
+/// is permanently stored in the registry.
+#[derive(Copy, Clone, Eq, PartialEq, Hash)]
+pub struct LuaString(usize);
+
 /// A result which can return a Lua error.
 pub type Result<T> = result::Result<T, Error>;
 
@@ -156,4 +161,15 @@ impl From<FromUtf8Error> for Error {
     fn from(err: FromUtf8Error) -> Error {
         Error::Utf8(err)
     }
+}
+
+#[test]
+fn test_intern() {
+    let mut state = State::new();
+    let ls: LuaString = state.intern("test");
+    state.push(ls).unwrap();
+    let rs: String = state.at(LuaIndex::Stack(-1)).unwrap();
+    state.pop(1);
+    assert!(rs == "test");
+    assert!(state.get_top() == 0);
 }
