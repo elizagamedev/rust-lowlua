@@ -609,7 +609,7 @@ impl State {
     /// Pushes onto the stack the Lua value associated with the userdata at the given index.
     ///
     /// Returns the type of the pushed value.
-    pub fn get_user_value(&mut self, idx: LuaIndex) -> LuaType {
+    pub fn get_uservalue(&mut self, idx: LuaIndex) -> LuaType {
         lua_to_rust_type(unsafe { ffi::lua_getuservalue(self.lua, idx.to_ffi()) })
     }
 
@@ -689,7 +689,7 @@ impl State {
 
     /// Pops a value from the stack and sets it as the new value associated to the userdata at the
     /// given index.
-    pub fn set_user_value(&mut self, idx: LuaIndex) {
+    pub fn set_uservalue(&mut self, idx: LuaIndex) {
         unsafe { ffi::lua_setuservalue(self.lua, idx.to_ffi()) }
     }
 
