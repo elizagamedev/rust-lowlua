@@ -177,9 +177,9 @@ impl State {
         self.get_internal_registry();
         self.get_field(LuaIndex::Stack(-1), "errfunc");
         self.remove(-2);
-        let errfunc_idx = self.abs_index(-(nargs as i32) - 2);
+        let errfunc_idx = self.abs_index(LuaIndex::Stack(-(nargs as i32) - 2)).to_stack();
         self.insert(errfunc_idx);
-        let result = unsafe { ffi::lua_pcall(self.lua, nargs as c_int, nresults, errfunc_idx) };
+        let result = unsafe { ffi::lua_pcall(self.lua, nargs as c_int, nresults, errfunc_idx as c_int) };
         self.remove(errfunc_idx);
         self.lua_to_rust_result(result)
     }
@@ -305,8 +305,13 @@ impl State {
 
     /// Converts the acceptable index idx into an equivalent absolute index (that is, one that does
     /// not depend on the stack top).
-    pub fn abs_index(&self, idx: i32) -> i32 {
-        unsafe { ffi::lua_absindex(self.lua, idx as c_int) as i32 }
+    pub fn abs_index(&self, idx: LuaIndex) -> LuaIndex {
+        match idx {
+            LuaIndex::Stack(_) => {
+                LuaIndex::Stack(unsafe { ffi::lua_absindex(self.lua, idx.to_ffi()) as i32 })
+            },
+            _ => idx,
+        }
     }
 
     /// Returns the index of the top element in the stack. Because indices start at 1, this result

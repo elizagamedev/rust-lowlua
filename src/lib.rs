@@ -87,6 +87,14 @@ pub enum LuaIndex {
 }
 
 impl LuaIndex {
+    /// Convert the index to a stack index if possible, otherwise panic.
+    pub fn to_stack(&self) -> i32 {
+        match *self {
+            LuaIndex::Stack(val) => val,
+            _ => unreachable!(),
+        }
+    }
+
     fn to_ffi(&self) -> libc::c_int {
         match *self {
             LuaIndex::Stack(val) => val,
