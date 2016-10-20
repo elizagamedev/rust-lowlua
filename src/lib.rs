@@ -1,4 +1,4 @@
-#![feature(try_from, reflect_marker)]
+#![feature(try_from, core_intrinsics)]
 
 extern crate lua53_sys as ffi;
 extern crate libc;
@@ -20,7 +20,7 @@ pub use state::*;
 /// in direct order (the first result is pushed first), and returns the number of results.
 /// Any other value in the stack below the results will be properly discarded by Lua.
 /// Like a Lua function, a native function called by Lua can also return many results.
-pub type NativeFunction = fn(&mut State) -> Result<u32>;
+pub type NativeFunction = fn(&mut State) -> RunResult<u32>;
 
 /// Enum of native Lua types.
 #[derive(Debug)]
@@ -109,65 +109,116 @@ impl LuaIndex {
 #[derive(Copy, Clone, Eq, PartialEq, Hash)]
 pub struct LuaString(usize);
 
-/// A result which can return a Lua error.
-pub type Result<T> = result::Result<T, Error>;
+/// A result which may return a Lua load-time error.
+pub type LoadResult<T> = result::Result<T, LoadError>;
 
-/// Describes a Lua error.
+/// Describes a Lua load-time error.
 #[derive(Debug)]
-pub enum Error {
+pub enum LoadError {
     /// An IO error occurred.
     Io(io::Error),
     /// A UTF-8 conversion error occurred.
     Utf8(FromUtf8Error),
-    /// An error occurred while converting types.
-    Type,
     /// A syntax error occurred.
     Syntax(String),
-    /// A runtime error occurred.
-    Runtime(String, String),
 }
 
-impl fmt::Display for Error {
+impl fmt::Display for LoadError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
-            Error::Io(ref err) => err.fmt(f),
-            Error::Utf8(ref err) => err.fmt(f),
-            Error::Type => write!(f, "An invalid Lua/native type conversion was attempted."),
-            Error::Syntax(ref str) => write!(f, "{}", str),
-            Error::Runtime(ref str, _) => write!(f, "{}", str),
+            LoadError::Io(ref err) => err.fmt(f),
+            LoadError::Utf8(ref err) => err.fmt(f),
+            LoadError::Syntax(ref msg) => write!(f, "{}", msg),
         }
     }
 }
 
-impl error::Error for Error {
+impl error::Error for LoadError {
     fn description(&self) -> &str {
         match *self {
-            Error::Io(ref err) => err.description(),
-            Error::Utf8(ref err) => err.description(),
-            Error::Type => "type conversion error",
-            Error::Syntax(_) => "Lua syntax error",
-            Error::Runtime(_, _) => "Lua runtime error",
+            LoadError::Io(ref err) => err.description(),
+            LoadError::Utf8(ref err) => err.description(),
+            LoadError::Syntax(_) => "Lua syntax error",
         }
     }
 
     fn cause(&self) -> Option<&error::Error> {
         match *self {
-            Error::Io(ref err) => Some(err),
-            Error::Utf8(ref err) => Some(err),
+            LoadError::Io(ref err) => Some(err),
+            LoadError::Utf8(ref err) => Some(err),
             _ => None,
         }
     }
 }
 
-impl From<io::Error> for Error {
-    fn from(err: io::Error) -> Error {
-        Error::Io(err)
+impl From<io::Error> for LoadError {
+    fn from(err: io::Error) -> LoadError {
+        LoadError::Io(err)
     }
 }
 
-impl From<FromUtf8Error> for Error {
-    fn from(err: FromUtf8Error) -> Error {
-        Error::Utf8(err)
+impl From<FromUtf8Error> for LoadError {
+    fn from(err: FromUtf8Error) -> LoadError {
+        LoadError::Utf8(err)
+    }
+}
+
+/// A result which may return a Lua runtime error.
+pub type RunResult<T> = result::Result<T, RunError>;
+
+/// Describes a Lua run-time error.
+#[derive(Debug)]
+pub struct RunError {
+    message: String,
+    traceback: Option<String>,
+}
+
+impl RunError {
+    /// Generate an error with the given message
+    pub fn new(message: String) -> RunError {
+        RunError {
+            message: message,
+            traceback: None,
+        }
+    }
+
+    /// Generate a type conversion error message (Lua -> Rust)
+    pub fn conversion_from_lua(src_type: Option<LuaType>, dst_type: &'static str) -> RunError {
+        let message = match src_type {
+            Some(ty) => format!("invalid conversion from Lua type `{:?}` to Rust type `{}`",
+                                ty, dst_type),
+            None => format!("invalid index"),
+        };
+        RunError {
+            message: message,
+            traceback: None,
+        }
+    }
+
+    /// Generate a type conversion error message (Rust -> Lua)
+    pub fn conversion_to_lua(src_type: &'static str, dst_type: LuaType) -> RunError {
+        let message = format!("invalid conversion from Rust type `{}` to Lua type `{:?}`",
+                              src_type, dst_type);
+        RunError {
+            message: message,
+            traceback: None,
+        }
+    }
+}
+
+impl fmt::Display for RunError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.message)
+    }
+}
+
+impl error::Error for RunError {
+    fn description(&self) -> &str {
+        "Lua runtime error"
+    }
+
+    fn cause(&self) -> Option<&error::Error> {
+        None
     }
 }
 
@@ -175,7 +226,7 @@ impl From<FromUtf8Error> for Error {
 fn test_intern() {
     let mut state = State::new();
     let ls: LuaString = state.intern("test");
-    state.push(ls).unwrap();
+    state.push(ls);
     let rs: String = state.at(LuaIndex::Stack(-1)).unwrap();
     state.pop(1);
     assert!(rs == "test");
@@ -203,7 +254,7 @@ fn test_userdata() {
         }
     }
 
-    fn test_function(state: &mut State) -> Result<u32> {
+    fn test_function(state: &mut State) -> RunResult<u32> {
         let ref_ref: &mut Rc<RefCell<HugeData>> = try!(state.userdata_at(LuaIndex::Stack(1)));
         let obj_ref = ref_ref.borrow();
         println!("{}", obj_ref.data);
@@ -215,4 +266,26 @@ fn test_userdata() {
     state.push_function(test_function);
     state.push_userdata(bighuge_data);
     state.call(1, LuaCallResults::Num(0)).unwrap();
+}
+
+#[test]
+#[should_panic]
+fn test_panic() {
+    let mut state = State::new();
+    fn test_function(_state: &mut State) -> RunResult<u32> {
+        panic!("Test panic~");
+    }
+    state.push_function(test_function);
+    state.call(0, LuaCallResults::Num(0)).unwrap();
+}
+
+#[test]
+fn test_error() {
+    let mut state = State::new();
+    fn test_function(_state: &mut State) -> RunResult<u32> {
+        Err(RunError::new("Test error~".to_string()))
+    }
+    state.push_function(test_function);
+    let result = state.call(0, LuaCallResults::Num(0));
+    assert!(result.is_err() && result.err().unwrap().message == "Test error~");
 }

@@ -1,23 +1,22 @@
 mod traits;
 
-use ffi;
-use libc;
-
 use std::{io, ptr};
 use std::ffi::CString;
 use std::mem;
 use std::hash::{Hash, Hasher};
 use std::collections::hash_map::DefaultHasher;
-use std::marker::Reflect;
-use std::any::TypeId;
-use libc::{c_int, c_char, size_t, c_void};
+use std::any::{Any, TypeId};
+use std::intrinsics::type_name;
+use std::panic::{self, AssertUnwindSafe};
+use libc::{self, c_int, c_char, size_t, c_void};
 
-use super::{Result, Error, LuaType, LuaOperator, LuaCallResults, LuaIndex, LuaString,
-            NativeFunction};
+use ffi;
+use super::{LoadResult, LoadError, RunResult, RunError, LuaType, LuaOperator, LuaCallResults,
+            LuaIndex, LuaString, NativeFunction};
 pub use self::traits::*;
 
 /// The userdata memory stored in Lua.
-struct Userdata<T: 'static + Reflect> {
+struct Userdata<T: Any> {
     type_id: TypeId,
     value: T,
 }
@@ -55,13 +54,15 @@ impl State {
             panic!("lua_newstate failed");
         }
 
-        // Set the panic handler
-        unsafe { ffi::lua_atpanic(lua, panic) };
+        // UNDONE: Set the panic handler
+        // Since panicking and unwinding the stack is undefined behavior, just let Lua abort for us
+        // instead of causing a mess.
+        /*unsafe { ffi::lua_atpanic(lua, panic) };
         extern "C" fn panic(lua: *mut ffi::lua_State) -> c_int {
             let mut state = State::from_raw_state(lua);
             let err = state.to_string(LuaIndex::Stack(-1)).unwrap();
             panic!("PANIC: unprotected error in call to Lua API ({})", err);
-        }
+        }*/
 
         // Create the state object
         let mut state = State {
@@ -114,7 +115,7 @@ impl State {
 
     /// Load string containing Lua code as a Lua function on the top of the stack.
     /// If an error occurs, nothing is pushed to the stack.
-    pub fn load_string(&mut self, str: &str, chunkname: &str) -> Result<()> {
+    pub fn load_string(&mut self, str: &str, chunkname: &str) -> LoadResult<()> {
         // TODO: special case for strings so there's not so much memory movement?
         let vec = str.as_bytes().to_vec();
         self.load_stream(vec.as_slice(), chunkname)
@@ -122,7 +123,7 @@ impl State {
 
     /// Load string containing Lua code as a Lua function on the top of the stack.
     /// If an error occurs, nothing is pushed to the stack.
-    pub fn load_stream<R: io::Read>(&mut self, stream: R, chunkname: &str) -> Result<()> {
+    pub fn load_stream<R: io::Read>(&mut self, stream: R, chunkname: &str) -> LoadResult<()> {
         extern "C" fn reader<R: io::Read>(_lua: *mut ffi::lua_State,
                                           data: *mut c_void,
                                           size: *mut size_t)
@@ -153,7 +154,7 @@ impl State {
                           CString::new(chunkname).unwrap().as_ptr(),
                           ptr::null())
         };
-        self.lua_to_rust_result(result)
+        self.lua_to_rust_load_result(result)
     }
 
     /// Calls a function.
@@ -169,7 +170,7 @@ impl State {
     /// ensure any extra space in the stack. The function results are pushed onto the stack in
     /// direct order (the first result is pushed first), so that after the call the last result is
     /// on the top of the stack.
-    pub fn call(&mut self, nargs: u32, results: LuaCallResults) -> Result<()> {
+    pub fn call(&mut self, nargs: u32, results: LuaCallResults) -> RunResult<()> {
         let nresults = match results {
             LuaCallResults::Num(val) => val as c_int,
             LuaCallResults::MultRet => ffi::LUA_MULTRET,
@@ -181,17 +182,12 @@ impl State {
         self.insert(errfunc_idx);
         let result = unsafe { ffi::lua_pcall(self.lua, nargs as c_int, nresults, errfunc_idx as c_int) };
         self.remove(errfunc_idx);
-        self.lua_to_rust_result(result)
+        self.lua_to_rust_run_result(result)
     }
 
     /// Push a type on the top of the stack.
-    pub fn push<T: ToLua>(&mut self, val: T) -> Result<()> {
-        let top = self.get_top();
-        let result = val.to_lua(self);
-        if result.is_err() {
-            self.set_top(top)
-        }
-        result
+    pub fn push<T: ToLua>(&mut self, val: T) {
+        val.to_lua(self);
     }
 
     /// Pushes a native function onto the stack. This function receives a pointer to a native
@@ -224,13 +220,27 @@ impl State {
                 let f =
                     &*(ffi::lua_touserdata(lua, ffi::lua_upvalueindex(1)) as *mut NativeFunction);
                 let mut state = State::from_raw_state(lua);
-                match f(&mut state) {
-                    Ok(val) => val as c_int,
+                // Call function and catch panics
+                let panic_result = panic::catch_unwind(AssertUnwindSafe(|| {
+                    f(&mut state)
+                }));
+                match panic_result {
+                    // No panic
+                    Ok(result) => {
+                        match result {
+                            Ok(val) => val as c_int,
+                            Err(err) => {
+                                state.push_userdata(err);
+                                ffi::lua_error(state.lua);
+                                0 // unreachable
+                            }
+                        }
+                    }
+                    // Panic!
                     Err(err) => {
-                        // TODO: improve error passing from Rust to Lua back to Rust
-                        state.push(format!("{}", err)).unwrap();
+                        state.push_userdata(err);
                         ffi::lua_error(state.lua);
-                        unreachable!();
+                        0 // unreachable
                     }
                 }
             }
@@ -254,7 +264,7 @@ impl State {
     ///
     /// This type can be later accessed by `userdata_at()` with safe type-checking, as lowlua
     /// uses `std::any` internally to keep track of userdata types.
-    pub fn push_userdata<T: 'static + Reflect>(&mut self, value: T) {
+    pub fn push_userdata<T: Any>(&mut self, value: T) {
         unsafe {
             // Push to stack
             let ud = Userdata {
@@ -277,7 +287,7 @@ impl State {
     }
 
     /// Get a type from a place on the stack.
-    pub fn at<T: FromLua>(&mut self, idx: LuaIndex) -> Result<T> {
+    pub fn at<T: FromLua>(&mut self, idx: LuaIndex) -> RunResult<T> {
         let top = self.get_top();
         let result = T::from_lua(self, idx);
         self.set_top(top);
@@ -287,7 +297,7 @@ impl State {
     /// Returns a reference to the data stored in the userdata value at the given index, given that
     /// the value is userdata (not including light userdata) and the type matches `T`.
     /// Otherwise, returns an `Error::Type`.
-    pub fn userdata_at<'a, T: 'static + Reflect>(&self, idx: LuaIndex) -> Result<&'a mut T> {
+    pub fn userdata_at<'a, T: Any>(&self, idx: LuaIndex) -> RunResult<&'a mut T> {
         unsafe {
             if ffi::lua_type(self.lua, idx.to_ffi()) == ffi::LUA_TUSERDATA {
                 let ptr = ffi::lua_touserdata(self.lua, idx.to_ffi()) as *mut Userdata<T>;
@@ -295,10 +305,10 @@ impl State {
                 if ud.type_id == TypeId::of::<T>() {
                     Ok(&mut ud.value)
                 } else {
-                    Err(Error::Type)
+                    Err(RunError::conversion_from_lua(Some(LuaType::Userdata), type_name::<T>()))
                 }
             } else {
-                Err(Error::Type)
+                Err(RunError::conversion_from_lua(self.type_at(idx), type_name::<T>()))
             }
         }
     }
@@ -409,6 +419,19 @@ impl State {
     /// Returns `true` if the value at the given index is a userdata (either full or light).
     pub fn is_userdata(&self, idx: LuaIndex) -> bool {
         unsafe { ffi::lua_isuserdata(self.lua, idx.to_ffi()) != 0 }
+    }
+
+    /// Returns `true` if the given index is a userdata of the given type.
+    pub fn is_userdata_of_type<T: Any>(&self, idx: LuaIndex) -> bool {
+        unsafe {
+            if ffi::lua_type(self.lua, idx.to_ffi()) == ffi::LUA_TUSERDATA {
+                let ptr = ffi::lua_touserdata(self.lua, idx.to_ffi()) as *mut Userdata<T>;
+                let ud = &mut *ptr;
+                ud.type_id == TypeId::of::<T>()
+            } else {
+                false
+            }
+        }
     }
 
     /// Returns `true` if the value at the given index is a function (either native or Lua).
@@ -575,8 +598,8 @@ impl State {
 
     /// Gets (or creates) the metatable associated with the specified userdata type and pushes it
     /// onto the top of the stack. This can be used to extend the functionality of a userdata type.
-    pub fn get_metatable_of<T: 'static + Reflect>(&mut self) {
-        extern "C" fn gc<T: 'static + Reflect>(lua: *mut ffi::lua_State) -> c_int {
+    pub fn get_metatable_of<T: Any>(&mut self) {
+        extern "C" fn gc<T: Any>(lua: *mut ffi::lua_State) -> c_int {
             unsafe {
                 let ptr = ffi::lua_touserdata(lua, 1) as *mut Userdata<T>;
                 ptr::drop_in_place(ptr);
@@ -843,24 +866,24 @@ impl State {
 
     // To
 
-    fn to_number(&mut self, idx: LuaIndex) -> Result<f64> {
+    fn to_number(&mut self, idx: LuaIndex) -> RunResult<f64> {
         unsafe {
             let mut isnum: c_int = 0;
             let num = ffi::lua_tonumberx(self.lua, idx.to_ffi(), &mut isnum as *mut c_int);
             if isnum == 0 {
-                Err(Error::Type)
+                Err(RunError::conversion_from_lua(self.type_at(idx), "f64"))
             } else {
                 Ok(num as f64)
             }
         }
     }
 
-    fn to_integer(&mut self, idx: LuaIndex) -> Result<i64> {
+    fn to_integer(&mut self, idx: LuaIndex) -> RunResult<i64> {
         unsafe {
             let mut isnum: c_int = 0;
             let num = ffi::lua_tointegerx(self.lua, idx.to_ffi(), &mut isnum as *mut c_int);
             if isnum == 0 {
-                Err(Error::Type)
+                Err(RunError::conversion_from_lua(self.type_at(idx), "i64"))
             } else {
                 Ok(num as i64)
             }
@@ -871,37 +894,39 @@ impl State {
         unsafe { ffi::lua_toboolean(self.lua, idx.to_ffi()) != 0 }
     }
 
-    fn to_string(&mut self, idx: LuaIndex) -> Result<String> {
+    fn to_string(&mut self, idx: LuaIndex) -> RunResult<String> {
         unsafe {
             let mut len: size_t = 0;
             let cstr = ffi::lua_tolstring(self.lua, idx.to_ffi(), &mut len as *mut size_t);
+            let ty = self.type_at(idx);
             if cstr.is_null() {
-                Err(Error::Type)
+                Err(RunError::conversion_from_lua(ty, "String"))
             } else {
                 use std::slice;
                 Ok(try!(String::from_utf8(slice::from_raw_parts::<u8>(cstr as *const u8, len)
-                    .to_vec())))
+                        .to_vec())
+                        .map_err(|_| RunError::conversion_from_lua(ty, "String"))))
             }
         }
     }
 
-    fn to_string_ptr(&mut self, idx: LuaIndex) -> Result<*const c_char> {
+    fn to_string_ptr(&mut self, idx: LuaIndex) -> RunResult<*const c_char> {
         unsafe {
             let ptr = ffi::lua_tostring(self.lua, idx.to_ffi());
             if ptr.is_null() {
-                Err(Error::Type)
+                Err(RunError::conversion_from_lua(self.type_at(idx), "usize"))
             } else {
                 Ok(ptr)
             }
         }
     }
 
-    fn to_unsigned(&mut self, idx: LuaIndex) -> Result<u64> {
+    fn to_unsigned(&mut self, idx: LuaIndex) -> RunResult<u64> {
         unsafe {
             let mut isnum: c_int = 0;
             let num = ffi::lua_tounsignedx(self.lua, idx.to_ffi(), &mut isnum as *mut c_int);
             if isnum == 0 {
-                Err(Error::Type)
+                Err(RunError::conversion_from_lua(self.type_at(idx), "u64"))
             } else {
                 Ok(num as u64)
             }
@@ -927,15 +952,51 @@ impl State {
         unimplemented!();
     }
 
-    // Debug
-    fn lua_to_rust_result(&mut self, result: c_int) -> Result<()> {
+    // Error
+    fn lua_to_rust_load_result(&mut self, result: c_int) -> LoadResult<()> {
         match result {
             ffi::LUA_OK => Ok(()),
-            ffi::LUA_ERRSYNTAX => Err(Error::Syntax(self.at(LuaIndex::Stack(-1)).unwrap())),
+            ffi::LUA_ERRSYNTAX => Err(LoadError::Syntax(self.at(LuaIndex::Stack(-1)).unwrap())),
+            ffi::LUA_ERRMEM => panic!("Lua memory allocation error"),
+            ffi::LUA_ERRERR => panic!("Lua error handler failed"),
+            _ => unreachable!("{}", result),
+        }
+    }
+
+    fn lua_to_rust_run_result(&mut self, result: c_int) -> RunResult<()> {
+        fn move_from_lua<T: Any>(state: &mut State, idx: LuaIndex) -> T {
+            let idx = state.abs_index(idx);
+            unsafe {
+                // Suck the error right back out of Lua
+                // First clear the metatable so the error isn't double-freed by Lua
+                ffi::lua_pushnil(state.lua);
+                ffi::lua_setmetatable(state.lua, idx.to_ffi());
+                // Now copy back into Rust managed memory
+                let lua_err = state.userdata_at::<T>(idx).unwrap();
+                let mut err = mem::uninitialized::<T>();
+                ptr::copy_nonoverlapping(lua_err as *const T, &mut err as *mut T, 1);
+                match idx {
+                    LuaIndex::Stack(idx) => state.remove(idx),
+                    _ => (),
+                }
+                err
+            }
+        }
+
+        match result {
+            ffi::LUA_OK => Ok(()),
             ffi::LUA_ERRRUN | ffi::LUA_ERRGCMM => {
-                let msg = self.at(LuaIndex::Stack(-1)).unwrap();
-                let trace = "".to_string();
-                Err(Error::Runtime(msg, trace))
+                if self.is_string(LuaIndex::Stack(-1)) {
+                    let msg = self.at(LuaIndex::Stack(-1)).unwrap();
+                    Err(RunError::new(msg))
+                } else if self.is_userdata_of_type::<RunError>(LuaIndex::Stack(-1)) {
+                    Err(move_from_lua(self, LuaIndex::Stack(-1)))
+                } else if self.is_userdata_of_type::<Box<Any + Send>>(LuaIndex::Stack(-1)) {
+                    let err = move_from_lua::<Box<Any + Send>>(self, LuaIndex::Stack(-1));
+                    panic::resume_unwind(err);
+                } else {
+                    unreachable!()
+                }
             }
             ffi::LUA_ERRMEM => panic!("Lua memory allocation error"),
             ffi::LUA_ERRERR => panic!("Lua error handler failed"),
