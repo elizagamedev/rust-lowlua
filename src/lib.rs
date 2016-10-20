@@ -1,4 +1,4 @@
-#![feature(try_from)]
+#![feature(try_from, reflect_marker)]
 
 extern crate lua53_sys as ffi;
 extern crate libc;
@@ -172,4 +172,39 @@ fn test_intern() {
     state.pop(1);
     assert!(rs == "test");
     assert!(state.get_top() == 0);
+}
+
+#[test]
+fn test_userdata() {
+    use std::rc::Rc;
+    use std::cell::RefCell;
+
+    struct HugeData {
+        data: String,
+    }
+
+    impl HugeData {
+        fn new() -> HugeData {
+            HugeData { data: "This is some huge data".to_string() }
+        }
+    }
+
+    impl Drop for HugeData {
+        fn drop(&mut self) {
+            println!("Dropping HugeData");
+        }
+    }
+
+    fn test_function(state: &mut State) -> Result<u32> {
+        let ref_ref: &mut Rc<RefCell<HugeData>> = try!(state.userdata_at(LuaIndex::Stack(1)));
+        let obj_ref = ref_ref.borrow();
+        println!("{}", obj_ref.data);
+        Ok(0)
+    }
+
+    let bighuge_data = Rc::new(RefCell::new(HugeData::new()));
+    let mut state = State::new();
+    state.push_function(test_function);
+    state.push_userdata(bighuge_data);
+    state.call(1, LuaCallResults::Num(0)).unwrap();
 }

@@ -16,8 +16,8 @@ pub trait ToLua {
 /// A conversion from a Lua type on the stack into a native type.
 ///
 /// The function should leave the stack as it found it, but like the `ToLua` trait, the state will
-/// reset the top of the stack as a weak safety guarantee. Note that `from_lua()` should *not* remove
-/// the original value from the stack.
+/// reset the top of the stack as a weak safety guarantee. Note that `from_lua()` should *not*
+/// remove the original value from the stack.
 pub trait FromLua: Sized {
     fn from_lua(state: &mut State, idx: LuaIndex) -> Result<Self>;
 }
@@ -132,7 +132,7 @@ impl<'a> ToLua for String {
 
 impl ToLua for LuaString {
     fn to_lua(&self, state: &mut State) -> Result<()> {
-        state.get_registry();
+        state.get_internal_registry();
         state.get_field(LuaIndex::Stack(-1), "string");
         state.remove(-2);
         try!(state.push(self.0));
@@ -232,7 +232,7 @@ impl FromLua for LuaString {
     fn from_lua(state: &mut State, idx: LuaIndex) -> Result<LuaString> {
         let val = try!(state.to_string_ptr(idx)) as usize;
         // Record a reference to the string
-        state.get_registry();
+        state.get_internal_registry();
         state.get_field(LuaIndex::Stack(-1), "string");
         try!(state.push(val));
         state.push_value(idx);

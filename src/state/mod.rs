@@ -5,12 +5,22 @@ use libc;
 
 use std::{io, ptr};
 use std::ffi::CString;
-use std::mem::transmute;
+use std::mem;
+use std::hash::{Hash, Hasher};
+use std::collections::hash_map::DefaultHasher;
+use std::marker::Reflect;
+use std::any::TypeId;
 use libc::{c_int, c_char, size_t, c_void};
 
-use super::{Result, Error, LuaType, LuaOperator, LuaCallResults, LuaIndex, LuaString, NativeFunction};
-
+use super::{Result, Error, LuaType, LuaOperator, LuaCallResults, LuaIndex, LuaString,
+            NativeFunction};
 pub use self::traits::*;
+
+/// The userdata memory stored in Lua.
+struct Userdata<T: 'static + Reflect> {
+    type_id: TypeId,
+    value: T,
+}
 
 /// Contains the Lua state.
 ///
@@ -64,16 +74,29 @@ impl State {
         // usage of an address for the key of a registry table was recommended by the Lua 5.3
         // reference manual.
         //
-        // Also take this opportunity to upload our error handler function.
+        // From here, populate our registry table with some important values:
+        // * `errfunc`: A function called to generate a traceback on a Lua runtime error.
+        // * `string`: A table that maps internal string pointers to their corresponding string
+        //             values.
+        // * `mt`: A table that maps `TypeId` hashes to their corresponding userdata metatables.
+        // * `user`: A table reserved for external crate use returned by `get_registry()`.
         unsafe {
-            let extraspace = transmute::<*mut c_void,
-                                         *mut *mut c_void>(ffi::lua_getextraspace(state.lua));
-            *extraspace = transmute::<*mut State, *mut c_void>(&mut state as *mut State);
+            let extraspace = ffi::lua_getextraspace(state.lua) as *mut *mut c_void;
+            *extraspace = (&mut state as *mut State) as *mut c_void;
             ffi::lua_newtable(state.lua);
+            // errfunc
             ffi::lua_pushcfunction(state.lua, errfunc);
-            ffi::lua_setfield(state.lua, -2, CString::new("errfunc").unwrap().as_ptr());
+            ffi::lua_setfield(state.lua, -2, b"errfunc\0".as_ptr() as *const c_char);
+            // string
             ffi::lua_newtable(state.lua);
-            ffi::lua_setfield(state.lua, -2, CString::new("string").unwrap().as_ptr());
+            ffi::lua_setfield(state.lua, -2, b"string\0".as_ptr() as *const c_char);
+            // mt
+            ffi::lua_newtable(state.lua);
+            ffi::lua_setfield(state.lua, -2, b"mt\0".as_ptr() as *const c_char);
+            // user
+            ffi::lua_newtable(state.lua);
+            ffi::lua_setfield(state.lua, -2, b"user\0".as_ptr() as *const c_char);
+            // save to registry
             ffi::lua_rawsetp(state.lua, ffi::LUA_REGISTRYINDEX, *extraspace);
         }
 
@@ -105,11 +128,11 @@ impl State {
                                           size: *mut size_t)
                                           -> *const c_char {
             unsafe {
-                let ref mut rd = *transmute::<*mut c_void, *mut ReaderData<R>>(data);
+                let rd = &mut *(data as *mut ReaderData<R>);
                 rd.string.truncate(0);
                 rd.stream.read_to_end(&mut rd.string).unwrap();
                 *size = rd.string.len() as size_t;
-                transmute::<*const u8, *const c_char>(rd.string.as_ptr())
+                rd.string.as_ptr() as *const c_char
             }
         }
 
@@ -126,8 +149,7 @@ impl State {
         let result = unsafe {
             ffi::lua_load(self.lua,
                           reader::<R>,
-                          transmute::<*mut ReaderData<R>,
-                                      *mut c_void>(&mut data as *mut ReaderData<R>),
+                          (&mut data as *mut ReaderData<R>) as *mut c_void,
                           CString::new(chunkname).unwrap().as_ptr(),
                           ptr::null())
         };
@@ -152,7 +174,7 @@ impl State {
             LuaCallResults::Num(val) => val as c_int,
             LuaCallResults::MultRet => ffi::LUA_MULTRET,
         };
-        self.get_registry();
+        self.get_internal_registry();
         self.get_field(LuaIndex::Stack(-1), "errfunc");
         self.remove(-2);
         let errfunc_idx = self.abs_index(-(nargs as i32) - 2);
@@ -199,7 +221,8 @@ impl State {
     pub fn push_closure(&mut self, f: NativeFunction, n: u32) {
         extern "C" fn func(lua: *mut ffi::lua_State) -> c_int {
             unsafe {
-                let f = *transmute::<*mut c_void, *mut NativeFunction>(ffi::lua_touserdata(lua, ffi::lua_upvalueindex(1)));
+                let f =
+                    &*(ffi::lua_touserdata(lua, ffi::lua_upvalueindex(1)) as *mut NativeFunction);
                 let mut state = State::from_raw_state(lua);
                 match f(&mut state) {
                     Ok(val) => val as c_int,
@@ -216,11 +239,7 @@ impl State {
         unsafe {
             // Push userdata instead of light userdata, as some platforms may have differing
             // pointer sizes between functions and variables.
-            use std::mem::size_of;
-            let ud =
-                transmute::<*mut c_void,
-                            *mut NativeFunction>(ffi::lua_newuserdata(self.lua,
-                                                                      size_of::<NativeFunction>()));
+            let ud = ffi::lua_newuserdata(self.lua, mem::size_of::<NativeFunction>()) as *mut NativeFunction;
             *ud = f;
             let n = (n + 1) as i32;
             if n > 1 {
@@ -230,30 +249,25 @@ impl State {
         }
     }
 
-    /// This function allocates a new block of memory with the size and contents of `data`,
-    /// pushes onto the stack a new full userdata with the block address, and returns a slice to
-    /// the block. The host program can freely use this memory.
-    pub fn push_userdata(&mut self, data: &[u8]) -> &mut [u8] {
-        unsafe {
-            use std::slice;
-            let ptr = ffi::lua_newuserdata(self.lua, data.len() as size_t);
-            libc::memcpy(ptr,
-                         transmute::<*const u8, *const c_void>(data.as_ptr()),
-                         data.len());
-            slice::from_raw_parts_mut(transmute::<*mut c_void, *mut u8>(ptr), data.len())
-        }
-    }
-
-    /// Pushes a light userdata onto the stack.
+    /// Transfers the object referred to by `value` into a Lua userdata object and sets the
+    /// appropriate metatable.
     ///
-    /// Userdata represent native values in Lua. A light userdata represents a pointer to memory.
-    /// It is a value (like a number): you do not create it, it has no individual metatable, and it
-    /// is not collected (as it was never created). A light userdata is equal to "any" light
-    /// userdata with the same memory address.
-    pub fn push_light_userdata<T>(&mut self, p: *const T) {
+    /// This type can be later accessed by `userdata_at()` with safe type-checking, as lowlua
+    /// uses `std::any` internally to keep track of userdata types.
+    pub fn push_userdata<T: 'static + Reflect>(&mut self, value: T) {
         unsafe {
-            let p = transmute::<*const T, *mut c_void>(p);
-            ffi::lua_pushlightuserdata(self.lua, p);
+            // Push to stack
+            let ud = Userdata {
+                type_id: TypeId::of::<T>(),
+                value: value,
+            };
+            let ptr =
+                ffi::lua_newuserdata(self.lua, mem::size_of::<Userdata<T>>()) as *mut Userdata<T>;
+            ptr::write(ptr, ud);
+
+            // Associate metatable
+            self.get_metatable_of::<T>();
+            ffi::lua_setmetatable(self.lua, -2);
         }
     }
 
@@ -270,28 +284,19 @@ impl State {
         result
     }
 
-    /// Returns the slice of data represented by the userdata at the given index if the value
-    /// is userdata. This function does not work with light userdata.
-    pub fn userdata_at(&self, idx: LuaIndex) -> Result<&mut [u8]> {
+    /// Returns a reference to the data stored in the userdata value at the given index, given that
+    /// the value is userdata (not including light userdata) and the type matches `T`.
+    /// Otherwise, returns an `Error::Type`.
+    pub fn userdata_at<'a, T: 'static + Reflect>(&self, idx: LuaIndex) -> Result<&'a mut T> {
         unsafe {
             if ffi::lua_type(self.lua, idx.to_ffi()) == ffi::LUA_TUSERDATA {
-                use std::slice;
-                let len = ffi::lua_rawlen(self.lua, idx.to_ffi()) as usize;
-                let ptr = transmute::<*mut c_void, *mut u8>(ffi::lua_touserdata(self.lua,
-                                                                                idx.to_ffi()));
-                Ok(slice::from_raw_parts_mut(ptr, len))
-            } else {
-                Err(Error::Type)
-            }
-        }
-    }
-
-    /// Returns the pointer represented by the light userdata at the given index if the type is
-    /// light userdata.
-    pub fn light_userdata_at<T>(&self, idx: LuaIndex) -> Result<*mut T> {
-        unsafe {
-            if ffi::lua_type(self.lua, idx.to_ffi()) == ffi::LUA_TLIGHTUSERDATA {
-                Ok(transmute::<*mut c_void, *mut T>(ffi::lua_touserdata(self.lua, idx.to_ffi())))
+                let ptr = ffi::lua_touserdata(self.lua, idx.to_ffi()) as *mut Userdata<T>;
+                let ud = &mut *ptr;
+                if ud.type_id == TypeId::of::<T>() {
+                    Ok(&mut ud.value)
+                } else {
+                    Err(Error::Type)
+                }
             } else {
                 Err(Error::Type)
             }
@@ -528,8 +533,8 @@ impl State {
     /// The access is raw, that is, it does not invoke the `__index` metamethod.
     ///
     /// Returns the `LuaType` of the pushed value.
-    pub fn raw_get_i(&mut self, idx: LuaIndex, n: i32) -> LuaType {
-        lua_to_rust_type(unsafe { ffi::lua_rawgeti(self.lua, idx.to_ffi(), n as c_int) })
+    pub fn raw_get_i(&mut self, idx: LuaIndex, n: i64) -> LuaType {
+        lua_to_rust_type(unsafe { ffi::lua_rawgeti(self.lua, idx.to_ffi(), n as ffi::lua_Integer) })
     }
 
     /// Pushes onto the stack the value `t[k]`, where `t` is the table at the given index and
@@ -538,10 +543,7 @@ impl State {
     ///
     /// Returns the type of the pushed value.
     pub fn raw_get_p<T>(&mut self, idx: LuaIndex, p: *const T) -> LuaType {
-        unsafe {
-            let p = transmute::<*const T, *const c_void>(p);
-            lua_to_rust_type(ffi::lua_rawgetp(self.lua, idx.to_ffi(), p))
-        }
+        unsafe { lua_to_rust_type(ffi::lua_rawgetp(self.lua, idx.to_ffi(), p as *const c_void)) }
     }
 
     /// Creates a new empty table and pushes it onto the stack.
@@ -566,6 +568,39 @@ impl State {
         unsafe { ffi::lua_getmetatable(self.lua, objindex.to_ffi()) != 0 }
     }
 
+    /// Gets (or creates) the metatable associated with the specified userdata type and pushes it
+    /// onto the top of the stack. This can be used to extend the functionality of a userdata type.
+    pub fn get_metatable_of<T: 'static + Reflect>(&mut self) {
+        extern "C" fn gc<T: 'static + Reflect>(lua: *mut ffi::lua_State) -> c_int {
+            unsafe {
+                let ptr = ffi::lua_touserdata(lua, 1) as *mut Userdata<T>;
+                ptr::drop_in_place(ptr);
+                0
+            }
+        }
+        // First, get a hash of the type, which is used to look up the appropriate metatable
+        let mut hasher = DefaultHasher::new();
+        TypeId::of::<T>().hash(&mut hasher);
+        let mt_key = hasher.finish() as ffi::lua_Integer;
+        // Now look up/create the table
+        unsafe {
+            self.get_internal_registry();
+            ffi::lua_getfield(self.lua, -1, b"mt\0".as_ptr() as *const c_char);
+            ffi::lua_remove(self.lua, -2);
+            ffi::lua_rawgeti(self.lua, -1, mt_key);
+            if ffi::lua_isnil(self.lua, -1) {
+                ffi::lua_pop(self.lua, 1);
+                // Create the metatable
+                ffi::lua_newtable(self.lua);
+                ffi::lua_pushcfunction(self.lua, gc::<T>);
+                ffi::lua_setfield(self.lua, -2, b"__gc\0".as_ptr() as *const c_char);
+                ffi::lua_pushvalue(self.lua, -1);
+                ffi::lua_rawseti(self.lua, -3, mt_key);
+            }
+            ffi::lua_remove(self.lua, -2);
+        }
+    }
+
     /// Pushes onto the stack the Lua value associated with the userdata at the given index.
     ///
     /// Returns the type of the pushed value.
@@ -576,11 +611,9 @@ impl State {
     /// Pushes our registry table onto the stack. When the Lua state is crated, a table is
     /// automatically allocated in the registry that can be freely used by the program.
     pub fn get_registry(&mut self) {
-        unsafe {
-            let extraspace = transmute::<*mut c_void,
-                                         *const *mut c_void>(ffi::lua_getextraspace(self.lua));
-            ffi::lua_rawgetp(self.lua, ffi::LUA_REGISTRYINDEX, *extraspace);
-        }
+        self.get_internal_registry();
+        self.get_field(LuaIndex::Stack(-1), "user");
+        self.remove(-2);
     }
 
     /// Pops a value from the stack and sets it as the new value of global `name`.
@@ -628,8 +661,8 @@ impl State {
     ///
     /// This function pops the value from the stack. The assignment is raw, that is,
     /// it does not invoke the `__newindex` metamethod.
-    pub fn raw_set_i(&mut self, idx: LuaIndex, n: i32) {
-        unsafe { ffi::lua_rawseti(self.lua, idx.to_ffi(), n as c_int) }
+    pub fn raw_set_i(&mut self, idx: LuaIndex, n: i64) {
+        unsafe { ffi::lua_rawseti(self.lua, idx.to_ffi(), n as ffi::lua_Integer) }
     }
 
     /// Does the equivalent of `t[p] = v`, where `t` is the table at the given index,
@@ -639,8 +672,7 @@ impl State {
     /// it does not invoke the `__newindex` metamethod.
     pub fn raw_set_p<T>(&mut self, idx: LuaIndex, p: *const T) {
         unsafe {
-            let p = transmute::<*const T, *const c_void>(p);
-            ffi::lua_rawsetp(self.lua, idx.to_ffi(), p);
+            ffi::lua_rawsetp(self.lua, idx.to_ffi(), p as *const c_void);
         }
     }
 
@@ -749,7 +781,7 @@ impl State {
     /// Creates a LuaString from the passed value. This value is interned and stored in the registry
     /// indefinitely.
     pub fn intern(&mut self, s: &str) -> LuaString {
-        self.get_registry();
+        self.get_internal_registry();
         self.get_field(LuaIndex::Stack(-1), "string");
         self.push_string(s);
         let val = self.to_string_ptr(LuaIndex::Stack(-1)).unwrap() as usize;
@@ -773,6 +805,15 @@ impl State {
         }
     }
 
+    // Misc
+    /// Push the internal registry onto the stack. This table is not exposed to external crates.
+    fn get_internal_registry(&mut self) {
+        unsafe {
+            let extraspace = ffi::lua_getextraspace(self.lua) as *const *mut c_void;
+            ffi::lua_rawgetp(self.lua, ffi::LUA_REGISTRYINDEX, *extraspace);
+        }
+    }
+
     // Push
 
     fn push_number(&mut self, n: f64) {
@@ -784,10 +825,7 @@ impl State {
     }
 
     fn push_string(&mut self, s: &str) {
-        unsafe {
-            let cstr = transmute::<*const u8, *const c_char>(s.as_ptr());
-            ffi::lua_pushlstring(self.lua, cstr, s.len() as size_t)
-        }
+        unsafe { ffi::lua_pushlstring(self.lua, s.as_ptr() as *const c_char, s.len() as size_t) }
     }
 
     fn push_boolean(&mut self, b: bool) {
@@ -836,8 +874,8 @@ impl State {
                 Err(Error::Type)
             } else {
                 use std::slice;
-                let cstr = transmute::<*const c_char, *const u8>(cstr);
-                Ok(try!(String::from_utf8(slice::from_raw_parts::<u8>(cstr, len).to_vec())))
+                Ok(try!(String::from_utf8(slice::from_raw_parts::<u8>(cstr as *const u8, len)
+                    .to_vec())))
             }
         }
     }
