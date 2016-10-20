@@ -130,21 +130,21 @@ impl ToLua for LuaString {
 impl FromLua for u8 {
     fn from_lua(state: &mut State, idx: LuaIndex) -> RunResult<u8> {
         Ok(try!(u8::try_from(try!(state.to_unsigned(idx)))
-            .map_err(|_| RunError::conversion_from_lua(state.type_at(idx), "u8"))))
+            .map_err(|_| RunError::conversion_from_lua(state.type_at(idx), "u8", state.backtrace()))))
     }
 }
 
 impl FromLua for u16 {
     fn from_lua(state: &mut State, idx: LuaIndex) -> RunResult<u16> {
         Ok(try!(u16::try_from(try!(state.to_unsigned(idx)))
-            .map_err(|_| RunError::conversion_from_lua(state.type_at(idx), "u16"))))
+            .map_err(|_| RunError::conversion_from_lua(state.type_at(idx), "u16", state.backtrace()))))
     }
 }
 
 impl FromLua for u32 {
     fn from_lua(state: &mut State, idx: LuaIndex) -> RunResult<u32> {
         Ok(try!(u32::try_from(try!(state.to_unsigned(idx)))
-            .map_err(|_| RunError::conversion_from_lua(state.type_at(idx), "u32"))))
+            .map_err(|_| RunError::conversion_from_lua(state.type_at(idx), "u32", state.backtrace()))))
     }
 }
 
@@ -157,28 +157,28 @@ impl FromLua for u64 {
 impl FromLua for usize {
     fn from_lua(state: &mut State, idx: LuaIndex) -> RunResult<usize> {
         Ok(try!(usize::try_from(try!(state.to_unsigned(idx)))
-            .map_err(|_| RunError::conversion_from_lua(state.type_at(idx), "usize"))))
+            .map_err(|_| RunError::conversion_from_lua(state.type_at(idx), "usize", state.backtrace()))))
     }
 }
 
 impl FromLua for i8 {
     fn from_lua(state: &mut State, idx: LuaIndex) -> RunResult<i8> {
         Ok(try!(i8::try_from(try!(state.to_integer(idx)))
-            .map_err(|_| RunError::conversion_from_lua(state.type_at(idx), "i8"))))
+            .map_err(|_| RunError::conversion_from_lua(state.type_at(idx), "i8", state.backtrace()))))
     }
 }
 
 impl FromLua for i16 {
     fn from_lua(state: &mut State, idx: LuaIndex) -> RunResult<i16> {
         Ok(try!(i16::try_from(try!(state.to_integer(idx)))
-            .map_err(|_| RunError::conversion_from_lua(state.type_at(idx), "i16"))))
+            .map_err(|_| RunError::conversion_from_lua(state.type_at(idx), "i16", state.backtrace()))))
     }
 }
 
 impl FromLua for i32 {
     fn from_lua(state: &mut State, idx: LuaIndex) -> RunResult<i32> {
         Ok(try!(i32::try_from(try!(state.to_integer(idx)))
-            .map_err(|_| RunError::conversion_from_lua(state.type_at(idx), "i32"))))
+            .map_err(|_| RunError::conversion_from_lua(state.type_at(idx), "i32", state.backtrace()))))
     }
 }
 
@@ -191,7 +191,7 @@ impl FromLua for i64 {
 impl FromLua for isize {
     fn from_lua(state: &mut State, idx: LuaIndex) -> RunResult<isize> {
         Ok(try!(isize::try_from(try!(state.to_integer(idx)))
-            .map_err(|_| RunError::conversion_from_lua(state.type_at(idx), "isize"))))
+            .map_err(|_| RunError::conversion_from_lua(state.type_at(idx), "isize", state.backtrace()))))
     }
 }
 

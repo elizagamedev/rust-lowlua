@@ -1,7 +1,7 @@
 mod traits;
 
 use std::{io, ptr};
-use std::ffi::CString;
+use std::ffi::{CStr, CString};
 use std::mem;
 use std::hash::{Hash, Hasher};
 use std::collections::hash_map::DefaultHasher;
@@ -57,12 +57,13 @@ impl State {
         // UNDONE: Set the panic handler
         // Since panicking and unwinding the stack is undefined behavior, just let Lua abort for us
         // instead of causing a mess.
-        /*unsafe { ffi::lua_atpanic(lua, panic) };
-        extern "C" fn panic(lua: *mut ffi::lua_State) -> c_int {
-            let mut state = State::from_raw_state(lua);
-            let err = state.to_string(LuaIndex::Stack(-1)).unwrap();
-            panic!("PANIC: unprotected error in call to Lua API ({})", err);
-        }*/
+        // unsafe { ffi::lua_atpanic(lua, panic) };
+        // extern "C" fn panic(lua: *mut ffi::lua_State) -> c_int {
+        // let mut state = State::from_raw_state(lua);
+        // let err = state.to_string(LuaIndex::Stack(-1)).unwrap();
+        // panic!("PANIC: unprotected error in call to Lua API ({})", err);
+        // }
+
 
         // Create the state object
         let mut state = State {
@@ -76,7 +77,7 @@ impl State {
         // reference manual.
         //
         // From here, populate our registry table with some important values:
-        // * `errfunc`: A function called to generate a traceback on a Lua runtime error.
+        // * `errfunc`: A function called to generate a backtrace on a Lua runtime error.
         // * `string`: A table that maps internal string pointers to their corresponding string
         //             values.
         // * `mt`: A table that maps `TypeId` hashes to their corresponding userdata metatables.
@@ -101,8 +102,21 @@ impl State {
             ffi::lua_rawsetp(state.lua, ffi::LUA_REGISTRYINDEX, *extraspace);
         }
 
-        extern "C" fn errfunc(_lua: *mut ffi::lua_State) -> c_int {
-            // TODO: traceback
+        extern "C" fn errfunc(lua: *mut ffi::lua_State) -> c_int {
+            // Coerce the error value into a RunError with a backtrace, unless it's a PanicError.
+            let mut state = State::from_raw_state(lua);
+            if state.is_userdata_of_type::<RunError>(LuaIndex::Stack(1)) ||
+               state.is_userdata_of_type::<Box<Any + Send>>(LuaIndex::Stack(1)) {
+                // do nothing
+            } else {
+                // Coerce to RunError
+                let message = match state.at::<String>(LuaIndex::Stack(1)) {
+                    Ok(val) => val,
+                    Err(_) => "unknown error".to_string(),
+                };
+                let bt = state.backtrace();
+                state.push_userdata(RunError::new(message, bt));
+            }
             1
         }
         state
@@ -180,7 +194,8 @@ impl State {
         self.remove(-2);
         let errfunc_idx = self.abs_index(LuaIndex::Stack(-(nargs as i32) - 2)).to_stack();
         self.insert(errfunc_idx);
-        let result = unsafe { ffi::lua_pcall(self.lua, nargs as c_int, nresults, errfunc_idx as c_int) };
+        let result =
+            unsafe { ffi::lua_pcall(self.lua, nargs as c_int, nresults, errfunc_idx as c_int) };
         self.remove(errfunc_idx);
         self.lua_to_rust_run_result(result)
     }
@@ -221,9 +236,7 @@ impl State {
                     &*(ffi::lua_touserdata(lua, ffi::lua_upvalueindex(1)) as *mut NativeFunction);
                 let mut state = State::from_raw_state(lua);
                 // Call function and catch panics
-                let panic_result = panic::catch_unwind(AssertUnwindSafe(|| {
-                    f(&mut state)
-                }));
+                let panic_result = panic::catch_unwind(AssertUnwindSafe(|| f(&mut state)));
                 match panic_result {
                     // No panic
                     Ok(result) => {
@@ -305,10 +318,14 @@ impl State {
                 if ud.type_id == TypeId::of::<T>() {
                     Ok(&mut ud.value)
                 } else {
-                    Err(RunError::conversion_from_lua(Some(LuaType::Userdata), type_name::<T>()))
+                    Err(RunError::conversion_from_lua(Some(LuaType::Userdata),
+                                                      type_name::<T>(),
+                                                      self.backtrace()))
                 }
             } else {
-                Err(RunError::conversion_from_lua(self.type_at(idx), type_name::<T>()))
+                Err(RunError::conversion_from_lua(self.type_at(idx),
+                                                  type_name::<T>(),
+                                                  self.backtrace()))
             }
         }
     }
@@ -319,7 +336,7 @@ impl State {
         match idx {
             LuaIndex::Stack(_) => {
                 LuaIndex::Stack(unsafe { ffi::lua_absindex(self.lua, idx.to_ffi()) as i32 })
-            },
+            }
             _ => idx,
         }
     }
@@ -820,6 +837,40 @@ impl State {
         LuaString(val)
     }
 
+    /// Generates a backtrace.
+    pub fn backtrace(&self) -> Vec<String> {
+        unsafe {
+            let mut result = Vec::new();
+            let mut debug = ffi::lua_Debug::default();
+            let mut level = 0;
+            while ffi::lua_getstack(self.lua, level, &mut debug as *mut ffi::lua_Debug) != 0 {
+                ffi::lua_getinfo(self.lua,
+                                 b"Sln\0".as_ptr() as *const c_char,
+                                 &mut debug as *mut ffi::lua_Debug);
+                let short_src = CStr::from_ptr(&debug.short_src as *const c_char).to_str().unwrap();
+                let currentline = if debug.currentline > 0 {
+                    format!("{}", debug.currentline)
+                } else {
+                    "".to_string()
+                };
+                let name = if *debug.namewhat != 0 {
+                    let namewhat = CStr::from_ptr(debug.namewhat).to_str().unwrap();
+                    let name = CStr::from_ptr(debug.name).to_str().unwrap();
+                    format!("{} '{}'", namewhat, name)
+                } else if *debug.what as u8 as char == 'm' {
+                    "[main]".to_string()
+                } else if *debug.what as u8 as char == 'C' {
+                    "[native]".to_string()
+                } else {
+                    format!("function <{}:{}>", short_src, debug.linedefined)
+                };
+                result.push(format!("{}:{} in {}", short_src, currentline, name));
+                level += 1;
+            }
+            result
+        }
+    }
+
 
 
     // Internal
@@ -871,7 +922,7 @@ impl State {
             let mut isnum: c_int = 0;
             let num = ffi::lua_tonumberx(self.lua, idx.to_ffi(), &mut isnum as *mut c_int);
             if isnum == 0 {
-                Err(RunError::conversion_from_lua(self.type_at(idx), "f64"))
+                Err(RunError::conversion_from_lua(self.type_at(idx), "f64", self.backtrace()))
             } else {
                 Ok(num as f64)
             }
@@ -883,7 +934,7 @@ impl State {
             let mut isnum: c_int = 0;
             let num = ffi::lua_tointegerx(self.lua, idx.to_ffi(), &mut isnum as *mut c_int);
             if isnum == 0 {
-                Err(RunError::conversion_from_lua(self.type_at(idx), "i64"))
+                Err(RunError::conversion_from_lua(self.type_at(idx), "i64", self.backtrace()))
             } else {
                 Ok(num as i64)
             }
@@ -900,12 +951,12 @@ impl State {
             let cstr = ffi::lua_tolstring(self.lua, idx.to_ffi(), &mut len as *mut size_t);
             let ty = self.type_at(idx);
             if cstr.is_null() {
-                Err(RunError::conversion_from_lua(ty, "String"))
+                Err(RunError::conversion_from_lua(ty, "String", self.backtrace()))
             } else {
                 use std::slice;
                 Ok(try!(String::from_utf8(slice::from_raw_parts::<u8>(cstr as *const u8, len)
                         .to_vec())
-                        .map_err(|_| RunError::conversion_from_lua(ty, "String"))))
+                    .map_err(|_| RunError::conversion_from_lua(ty, "String", self.backtrace()))))
             }
         }
     }
@@ -914,7 +965,7 @@ impl State {
         unsafe {
             let ptr = ffi::lua_tostring(self.lua, idx.to_ffi());
             if ptr.is_null() {
-                Err(RunError::conversion_from_lua(self.type_at(idx), "usize"))
+                Err(RunError::conversion_from_lua(self.type_at(idx), "usize", self.backtrace()))
             } else {
                 Ok(ptr)
             }
@@ -926,7 +977,7 @@ impl State {
             let mut isnum: c_int = 0;
             let num = ffi::lua_tounsignedx(self.lua, idx.to_ffi(), &mut isnum as *mut c_int);
             if isnum == 0 {
-                Err(RunError::conversion_from_lua(self.type_at(idx), "u64"))
+                Err(RunError::conversion_from_lua(self.type_at(idx), "u64", self.backtrace()))
             } else {
                 Ok(num as u64)
             }
@@ -986,10 +1037,7 @@ impl State {
         match result {
             ffi::LUA_OK => Ok(()),
             ffi::LUA_ERRRUN | ffi::LUA_ERRGCMM => {
-                if self.is_string(LuaIndex::Stack(-1)) {
-                    let msg = self.at(LuaIndex::Stack(-1)).unwrap();
-                    Err(RunError::new(msg))
-                } else if self.is_userdata_of_type::<RunError>(LuaIndex::Stack(-1)) {
+                if self.is_userdata_of_type::<RunError>(LuaIndex::Stack(-1)) {
                     Err(move_from_lua(self, LuaIndex::Stack(-1)))
                 } else if self.is_userdata_of_type::<Box<Any + Send>>(LuaIndex::Stack(-1)) {
                     let err = move_from_lua::<Box<Any + Send>>(self, LuaIndex::Stack(-1));

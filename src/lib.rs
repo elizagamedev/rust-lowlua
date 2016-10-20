@@ -169,39 +169,49 @@ pub type RunResult<T> = result::Result<T, RunError>;
 /// Describes a Lua run-time error.
 #[derive(Debug)]
 pub struct RunError {
-    message: String,
-    traceback: Option<String>,
+    pub message: String,
+    pub backtrace: Vec<String>,
 }
 
 impl RunError {
-    /// Generate an error with the given message
-    pub fn new(message: String) -> RunError {
+    /// Generate an error with the given message and backtrace.
+    pub fn new(message: String, backtrace: Vec<String>) -> RunError {
         RunError {
             message: message,
-            traceback: None,
+            backtrace: backtrace,
         }
     }
 
     /// Generate a type conversion error message (Lua -> Rust)
-    pub fn conversion_from_lua(src_type: Option<LuaType>, dst_type: &'static str) -> RunError {
+    pub fn conversion_from_lua(src_type: Option<LuaType>,
+                               dst_type: &'static str,
+                               backtrace: Vec<String>)
+                               -> RunError {
         let message = match src_type {
-            Some(ty) => format!("invalid conversion from Lua type `{:?}` to Rust type `{}`",
-                                ty, dst_type),
+            Some(ty) => {
+                format!("invalid conversion from Lua type `{:?}` to Rust type `{}`",
+                        ty,
+                        dst_type)
+            }
             None => format!("invalid index"),
         };
         RunError {
             message: message,
-            traceback: None,
+            backtrace: backtrace,
         }
     }
 
     /// Generate a type conversion error message (Rust -> Lua)
-    pub fn conversion_to_lua(src_type: &'static str, dst_type: LuaType) -> RunError {
+    pub fn conversion_to_lua(src_type: &'static str,
+                             dst_type: LuaType,
+                             backtrace: Vec<String>)
+                             -> RunError {
         let message = format!("invalid conversion from Rust type `{}` to Lua type `{:?}`",
-                              src_type, dst_type);
+                              src_type,
+                              dst_type);
         RunError {
             message: message,
-            traceback: None,
+            backtrace: backtrace,
         }
     }
 }
@@ -282,8 +292,8 @@ fn test_panic() {
 #[test]
 fn test_error() {
     let mut state = State::new();
-    fn test_function(_state: &mut State) -> RunResult<u32> {
-        Err(RunError::new("Test error~".to_string()))
+    fn test_function(state: &mut State) -> RunResult<u32> {
+        Err(RunError::new("Test error~".to_string(), state.backtrace()))
     }
     state.push_function(test_function);
     let result = state.call(0, LuaCallResults::Num(0));
