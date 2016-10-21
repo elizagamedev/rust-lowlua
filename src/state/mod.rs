@@ -330,6 +330,24 @@ impl State {
         }
     }
 
+    /// Moves the userdata out of Lua back into Rust. The userdata will still exist in Lua, as
+    /// it's not possible (or a good idea) to remove every reference to it, but will be rendered
+    /// completely inert as it's metatable will be stripped.
+    pub fn userdata_move<T: Any>(&self, idx: LuaIndex) -> RunResult<T> {
+        unsafe {
+            let idx = self.abs_index(idx);
+            // Suck the error right back out of Lua
+            // First clear the metatable so the error isn't double-freed by Lua
+            ffi::lua_pushnil(self.lua);
+            ffi::lua_setmetatable(self.lua, idx.to_ffi());
+            // Now copy back into Rust managed memory
+            let lua_obj = try!(self.userdata_at::<T>(idx));
+            let mut obj = mem::uninitialized::<T>();
+            ptr::copy_nonoverlapping(lua_obj as *const T, &mut obj as *mut T, 1);
+            Ok(obj)
+        }
+    }
+
     /// Converts the acceptable index idx into an equivalent absolute index (that is, one that does
     /// not depend on the stack top).
     pub fn abs_index(&self, idx: LuaIndex) -> LuaIndex {
@@ -1015,32 +1033,16 @@ impl State {
     }
 
     fn lua_to_rust_run_result(&mut self, result: c_int) -> RunResult<()> {
-        fn move_from_lua<T: Any>(state: &mut State, idx: LuaIndex) -> T {
-            let idx = state.abs_index(idx);
-            unsafe {
-                // Suck the error right back out of Lua
-                // First clear the metatable so the error isn't double-freed by Lua
-                ffi::lua_pushnil(state.lua);
-                ffi::lua_setmetatable(state.lua, idx.to_ffi());
-                // Now copy back into Rust managed memory
-                let lua_err = state.userdata_at::<T>(idx).unwrap();
-                let mut err = mem::uninitialized::<T>();
-                ptr::copy_nonoverlapping(lua_err as *const T, &mut err as *mut T, 1);
-                match idx {
-                    LuaIndex::Stack(idx) => state.remove(idx),
-                    _ => (),
-                }
-                err
-            }
-        }
-
         match result {
             ffi::LUA_OK => Ok(()),
             ffi::LUA_ERRRUN | ffi::LUA_ERRGCMM => {
                 if self.is_userdata_of_type::<RunError>(LuaIndex::Stack(-1)) {
-                    Err(move_from_lua(self, LuaIndex::Stack(-1)))
+                    let err = self.userdata_move(LuaIndex::Stack(-1)).unwrap();
+                    self.pop(1);
+                    Err(err)
                 } else if self.is_userdata_of_type::<Box<Any + Send>>(LuaIndex::Stack(-1)) {
-                    let err = move_from_lua::<Box<Any + Send>>(self, LuaIndex::Stack(-1));
+                    let err = self.userdata_move(LuaIndex::Stack(-1)).unwrap();
+                    self.pop(1);
                     panic::resume_unwind(err);
                 } else {
                     unreachable!()
